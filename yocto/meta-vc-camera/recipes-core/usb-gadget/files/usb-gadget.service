@@ -1,0 +1,18 @@
+[Unit]
+Description=USB composite gadget (CDC-NCM network + ACM serial)
+# The UDC may probe after us early in boot; the script waits up to 30 s for
+# it, and Restart=on-failure (allowed for oneshot since systemd 254) retries.
+After=systemd-modules-load.service sys-kernel-config.mount
+Wants=sys-kernel-config.mount
+Before=dnsmasq.service serial-getty@ttyGS0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/usb-gadget start
+ExecStop=/usr/sbin/usb-gadget stop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

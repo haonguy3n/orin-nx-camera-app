@@ -1,0 +1,21 @@
+From cfc118f8cfe399188203b6a4dbbbe72534c93158 Mon Sep 17 00:00:00 2001
+From: "/setup.sh" <support@vision-components.com>
+Date: Thu, 8 Jan 2026 14:25:17 +0100
+Subject: [PATCH] Added VC MIPI Driver sources to Makefile.
+
+---
+ nvidia/drivers/media/i2c/Makefile | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/nvidia/drivers/media/i2c/Makefile b/nvidia/drivers/media/i2c/Makefile
+index c4708d8c7..1165bcf8e 100644
+--- a/nvidia/drivers/media/i2c/Makefile
++++ b/nvidia/drivers/media/i2c/Makefile
+@@ -13,6 +13,7 @@ obj-$(CONFIG_NV_VIDEO_IMX318) += nv_imx318.o
+ obj-$(CONFIG_NV_VIDEO_LC898212) += nv_lc898212.o
+ obj-$(CONFIG_NV_VIDEO_OV5693) += nv_ov5693.o
+ obj-$(CONFIG_NV_VIDEO_OV9281) += nv_ov9281.o
++obj-$(CONFIG_NV_VIDEO_VC_MIPI) += vc_mipi_camera.o vc_mipi_core.o vc_mipi_modules.o
+ obj-$(CONFIG_NV_VIDEO_OV10823) += nv_ov10823.o
+ obj-$(CONFIG_NV_VIDEO_OV23850) += nv_ov23850.o
+ obj-$(CONFIG_I2C_IOEXPANDER_PCA9570) += pca9570.o

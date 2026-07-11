@@ -1,0 +1,32 @@
+From 3b4f8a9467b1b33de602f953a2ad94b196985807 Mon Sep 17 00:00:00 2001
+From: "/setup.sh" <support@vision-components.com>
+Date: Thu, 8 Jan 2026 15:22:20 +0100
+Subject: [PATCH] The function tegracam_init_ctrl_ranges_by_mode was using
+ wrong max values.
+
+---
+ nvidia/drivers/media/platform/tegra/camera/tegracam_ctrls.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/nvidia/drivers/media/platform/tegra/camera/tegracam_ctrls.c b/nvidia/drivers/media/platform/tegra/camera/tegracam_ctrls.c
+index 0784ce8ca..265463c43 100644
+--- a/nvidia/drivers/media/platform/tegra/camera/tegracam_ctrls.c
++++ b/nvidia/drivers/media/platform/tegra/camera/tegracam_ctrls.c
+@@ -688,7 +688,7 @@ int tegracam_init_ctrl_ranges_by_mode(
+ 		case TEGRA_CAMERA_CID_GAIN:
+ 			err = v4l2_ctrl_modify_range(ctrl,
+ 				ctrlprops->min_gain_val,
+-				ctrlprops->max_gain_val + 1,
++				ctrlprops->max_gain_val,
+ 				ctrlprops->step_gain_val,
+ 				ctrlprops->default_gain);
+ 			break;
+@@ -702,7 +702,7 @@ int tegracam_init_ctrl_ranges_by_mode(
+ 		case TEGRA_CAMERA_CID_EXPOSURE:
+ 			err = v4l2_ctrl_modify_range(ctrl,
+ 				ctrlprops->min_exp_time.val,
+-				ctrlprops->max_exp_time.val + 1,
++				ctrlprops->max_exp_time.val,
+ 				ctrlprops->step_exp_time.val,
+ 				ctrlprops->default_exp_time.val);
+ 			break;
