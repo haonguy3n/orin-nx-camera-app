@@ -19,22 +19,21 @@ keeps building the stock image.
 
 This repo is not cloned into the build project — it is bind-linked in:
 
-- `~/Projects/orin-nx/repos/camera-app` is a **symlink** to
-  `~/Projects/camera-app` (this working tree). Edits here are picked up by
-  the next build with no commit/fetch step.
-- `orin-nx.yml` has a **url-less repo entry** `camera-app` whose layer path is
-  `repos/camera-app/yocto/meta-vc-camera`. yb (like kas) treats a url-less
-  repo as the project directory itself and skips git checkout for it, so the
-  layer path resolves through the symlink and nothing is ever fetched.
-- The `yb: mounts:` entry for `/home/hao/Projects/camera-app` is only relevant
-  if the build is ever switched to a container (`yb: version:`/`image:`);
-  today the build runs natively on the host and the mount list is unused.
-- `camera-streamer.bb` builds `../embedded` via **externalsrc** (path derived
-  from the layer location), so the app also builds straight from this tree.
+- `~/Projects/orin-nx/meta-vc-camera` is a **symlink** to
+  `~/Projects/camera-app/yocto/meta-vc-camera` (this working tree), so the
+  layer sits at the build-project root like any other layer while its content
+  stays version-controlled here. Edits are picked up by the next build with
+  no commit/fetch step.
+- `orin-nx.yml` has a **url-less repo entry** `camera-app` with layer path
+  `meta-vc-camera`. yb (like kas) anchors a url-less repo at the project
+  directory and skips git checkout for it, so the layer resolves through the
+  symlink and nothing is ever fetched.
+- `camera-streamer.bb` builds `<repo>/embedded` via **externalsrc** — the
+  path is derived from the layer's real location (symlink resolved), so the
+  app also builds straight from this tree.
 
-Once the repo has a remote and commits, the yml entry can become a normal
-`url:`/`branch:` repo with `layers: yocto/meta-vc-camera:` and the symlink can
-go away.
+Once the repo has a remote, the yml entry can become a normal `url:`/`branch:`
+repo with `layers: yocto/meta-vc-camera:` and the symlink can go away.
 
 ## What the layer adds
 

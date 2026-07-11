@@ -8,7 +8,9 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 
 inherit systemd features_check
 
-REQUIRED_DISTRO_FEATURES = "systemd usbgadget"
+# Not "usbgadget": that is a machine feature, and meta-tegra's tegra-common.inc
+# doesn't set it anyway (the L4T kernel has configfs gadget support regardless).
+REQUIRED_DISTRO_FEATURES = "systemd"
 
 SRC_URI = " \
     file://usb-gadget.sh \

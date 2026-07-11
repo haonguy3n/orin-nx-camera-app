@@ -15,12 +15,13 @@ inherit cmake pkgconfig systemd externalsrc
 #   <repo>/yocto/meta-vc-camera  (this layer, VC_CAMERA_LAYERDIR)
 #   <repo>/embedded              (the CMake project)
 # externalsrc (rather than a file:// SRC_URI copy) because yb runs bitbake
-# against the live checkout — repos/camera-app in the build project is (a
-# symlink to) this working tree, so building straight from it picks up source
-# edits without requiring commits or re-fetching, which is what we want while
-# the app is under active development. The path is derived from the layer
-# location, so it works wherever the repo is checked out or mounted.
-EXTERNALSRC = "${@os.path.normpath(d.getVar('VC_CAMERA_LAYERDIR') + '/../../embedded')}"
+# against the live checkout, so builds pick up source edits without a
+# commit/fetch step while the app is under active development.
+# realpath first: the layer is reached via a symlink (e.g.
+# ~/Projects/orin-nx/meta-vc-camera -> <repo>/yocto/meta-vc-camera), and
+# ../../embedded only exists relative to the layer's real location. If the
+# layer is ever moved out of the repo, override EXTERNALSRC in local.conf.
+EXTERNALSRC = "${@os.path.normpath(os.path.join(os.path.realpath(d.getVar('VC_CAMERA_LAYERDIR')), '..', '..', 'embedded'))}"
 
 DEPENDS = " \
     gstreamer1.0 \
