@@ -4,6 +4,8 @@ After=network.target
 
 [Service]
 ExecStart=/usr/bin/camera-streamer
+# Re-read the config and re-serve (e.g. switch listen= between usb/ethernet).
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2
 

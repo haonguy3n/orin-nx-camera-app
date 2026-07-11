@@ -245,6 +245,11 @@ camera-streamer
 
 Design notes:
 
+- **Transport is interface-agnostic**: the RTSP server binds a configurable address
+  (`[server] listen = all | usb | ethernet | <ip/iface>`), so the same streams serve
+  over the USB gadget network, the wired GigE port, or both at once (`all`, default).
+  SIGHUP (`systemctl reload`) re-reads the config and rebinds at runtime — Ethernet
+  also lifts the USB2 bandwidth ceiling when a wired link is available.
 - Use GStreamer as the media backbone rather than hand-rolled Argus/V4L2 + NVENC API:
   the NVMM zero-copy path, RTSP, and pipeline introspection come free; the app's value
   is configuration, control, and supervision.

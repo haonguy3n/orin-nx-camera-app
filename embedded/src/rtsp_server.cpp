@@ -1,8 +1,51 @@
 #include "rtsp_server.h"
 
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+
 #include <string>
 
 namespace {
+
+// Interface names behind the listen= aliases.
+constexpr const char* kUsbIface = "usb0";
+constexpr const char* kEthIface = "eth0";
+
+// First IPv4 address of a network interface, or "" if the interface is
+// missing or has no address yet (e.g. ethernet before DHCP finishes).
+std::string iface_ipv4(const std::string& iface) {
+    struct ifaddrs* addrs = nullptr;
+    if (getifaddrs(&addrs) != 0)
+        return "";
+    std::string ip;
+    for (struct ifaddrs* a = addrs; a != nullptr; a = a->ifa_next) {
+        if (!a->ifa_addr || a->ifa_addr->sa_family != AF_INET || iface != a->ifa_name)
+            continue;
+        char buf[INET_ADDRSTRLEN];
+        auto* sin = reinterpret_cast<struct sockaddr_in*>(a->ifa_addr);
+        if (inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf))) {
+            ip = buf;
+            break;
+        }
+    }
+    freeifaddrs(addrs);
+    return ip;
+}
+
+// listen= value -> bind address. "" means unresolvable right now.
+std::string resolve_listen(const std::string& listen) {
+    if (listen == "all")
+        return "0.0.0.0";
+    if (listen == "usb")
+        return iface_ipv4(kUsbIface);
+    if (listen == "ethernet")
+        return iface_ipv4(kEthIface);
+    struct in_addr dummy;
+    if (inet_pton(AF_INET, listen.c_str(), &dummy) == 1)
+        return listen;  // explicit IPv4 address
+    return iface_ipv4(listen);  // explicit interface name
+}
 
 // Encoder + parser + payloader tail shared by the argus and v4l2 pipelines.
 // nvv4l2h26xenc bitrate is in bit/s.
@@ -50,17 +93,19 @@ std::string build_launch(const CameraConfig& cam) {
     return p;
 }
 
-void on_client_closed(GstRTSPClient* client, gpointer /*user_data*/) {
+const char* client_ip(GstRTSPClient* client) {
     GstRTSPConnection* conn = gst_rtsp_client_get_connection(client);
-    g_message("client disconnected: %s",
-              conn ? gst_rtsp_connection_get_ip(conn) : "unknown");
+    const char* ip = conn ? gst_rtsp_connection_get_ip(conn) : nullptr;
+    return ip ? ip : "unknown";
+}
+
+void on_client_closed(GstRTSPClient* client, gpointer /*user_data*/) {
+    g_message("client disconnected: %s", client_ip(client));
 }
 
 void on_client_connected(GstRTSPServer* /*server*/, GstRTSPClient* client,
                          gpointer /*user_data*/) {
-    GstRTSPConnection* conn = gst_rtsp_client_get_connection(client);
-    g_message("client connected: %s",
-              conn ? gst_rtsp_connection_get_ip(conn) : "unknown");
+    g_message("client connected: %s", client_ip(client));
     g_signal_connect(client, "closed", G_CALLBACK(on_client_closed), nullptr);
 }
 
@@ -68,16 +113,42 @@ void on_client_connected(GstRTSPServer* /*server*/, GstRTSPClient* client,
 
 RtspServer::RtspServer(const Config& config) : config_(config) {}
 
+// Full teardown so a new server can bind the same port right away (runtime
+// interface switch): drop the listening socket, close every client (which
+// tears down its sessions and media), and drop any remaining sessions.
 RtspServer::~RtspServer() {
-    if (attach_id_ != 0)
-        g_source_remove(attach_id_);
-    if (server_ != nullptr)
+    if (server_ != nullptr) {
+        if (attach_id_ != 0)
+            g_source_remove(attach_id_);
+        // The filters return the (empty, nothing REF'd) list of matches.
+        g_list_free(gst_rtsp_server_client_filter(
+            server_,
+            [](GstRTSPServer*, GstRTSPClient*, gpointer) {
+                return GST_RTSP_FILTER_REMOVE;
+            },
+            nullptr));
+        GstRTSPSessionPool* pool = gst_rtsp_server_get_session_pool(server_);
+        g_list_free(gst_rtsp_session_pool_filter(
+            pool,
+            [](GstRTSPSessionPool*, GstRTSPSession*, gpointer) {
+                return GST_RTSP_FILTER_REMOVE;
+            },
+            nullptr));
+        g_object_unref(pool);
         g_object_unref(server_);
+    }
 }
 
 bool RtspServer::start() {
+    const std::string address = resolve_listen(config_.listen);
+    if (address.empty()) {
+        g_printerr("listen=%s: no usable IPv4 address (interface down or "
+                   "no address yet?)\n", config_.listen.c_str());
+        return false;
+    }
+
     server_ = gst_rtsp_server_new();
-    gst_rtsp_server_set_address(server_, "0.0.0.0");
+    gst_rtsp_server_set_address(server_, address.c_str());
     gst_rtsp_server_set_service(server_, std::to_string(config_.port).c_str());
 
     GstRTSPMountPoints* mounts = gst_rtsp_server_get_mount_points(server_);
@@ -112,11 +183,13 @@ bool RtspServer::start() {
 
     attach_id_ = gst_rtsp_server_attach(server_, nullptr);
     if (attach_id_ == 0) {
-        g_printerr("failed to attach RTSP server on port %d\n", config_.port);
+        g_printerr("failed to attach RTSP server on %s:%d\n", address.c_str(),
+                   config_.port);
         return false;
     }
 
-    g_message("RTSP server listening on rtsp://0.0.0.0:%d (%d stream%s)",
-              config_.port, enabled, enabled == 1 ? "" : "s");
+    g_message("RTSP server listening on rtsp://%s:%d (listen=%s, %d stream%s)",
+              address.c_str(), config_.port, config_.listen.c_str(), enabled,
+              enabled == 1 ? "" : "s");
     return true;
 }

@@ -82,6 +82,11 @@ Config load_config(const std::string& path) {
         g_warning("config: [server] port %d out of range (using 8554)", cfg.port);
         cfg.port = 8554;
     }
+    // Free-form on purpose: besides all/usb/ethernet it accepts an explicit
+    // IPv4 address or interface name (validated at bind time).
+    cfg.listen = get_string(kf, "server", "listen", cfg.listen);
+    if (cfg.listen.empty())
+        cfg.listen = "all";
 
     for (int i = 0; i < Config::kNumCameras; ++i) {
         char group[8];

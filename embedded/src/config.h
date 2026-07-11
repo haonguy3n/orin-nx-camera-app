@@ -20,6 +20,14 @@ struct Config {
     static constexpr int kNumCameras = 2;
 
     int port = 8554;
+    // Where to serve RTSP:
+    //   all      - every interface (USB and ethernet at once, 0.0.0.0)
+    //   usb      - the USB gadget network only (interface usb0)
+    //   ethernet - the wired network only (interface eth0)
+    //   <other>  - an explicit IPv4 address or interface name
+    // Switch at runtime by editing the file and sending SIGHUP
+    // (systemctl reload camera-streamer).
+    std::string listen = "all";
     CameraConfig cameras[kNumCameras];
 };
 

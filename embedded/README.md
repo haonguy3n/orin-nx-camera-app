@@ -39,7 +39,8 @@ ships in `config/camera-streamer.conf`. All keys:
 
 | Section | Key | Default | Meaning |
 |---|---|---|---|
-| `[server]` | `port` | `8554` | RTSP listen port (binds 0.0.0.0) |
+| `[server]` | `port` | `8554` | RTSP listen port |
+| | `listen` | `all` | network to serve on: `all` (USB + ethernet at once), `usb` (usb0 only), `ethernet` (eth0 only), or an explicit IPv4 address / interface name |
 | `[cam0]`/`[cam1]` | `enabled` | `true` | serve this camera at `/cam0`/`/cam1` |
 | | `source` | `argus` | `argus` (nvarguscamerasrc/ISP), `v4l2` (v4l2src, best-effort in M1), `test` (videotestsrc + software encoder, no hardware needed) |
 | | `sensor-id` | `0` / `1` | argus only: nvarguscamerasrc sensor-id |
@@ -52,6 +53,24 @@ ships in `config/camera-streamer.conf`. All keys:
 
 The final GStreamer launch string for every mount is logged at startup —
 useful for reproducing issues with plain `gst-launch-1.0`.
+
+### Runtime reconfiguration (USB ↔ ethernet switch)
+
+The service re-reads its config on SIGHUP and re-serves with the new
+settings — connected clients are dropped on purpose, and the bound address
+is logged:
+
+```sh
+# on the device: restrict streaming to the wired network
+sed -i 's/^listen=.*/listen=ethernet/' /etc/camera-streamer.conf
+systemctl reload camera-streamer
+```
+
+`listen=all` (the default) serves USB and ethernet simultaneously, so
+switching is only needed to *restrict* access to one network. If the chosen
+interface has no IPv4 address yet (ethernet before DHCP), a failed reload
+reverts to the previous config; a failed start exits and systemd retries
+every 2 s until the address appears.
 
 ## Testing without camera hardware
 
