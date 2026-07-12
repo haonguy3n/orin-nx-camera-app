@@ -1,4 +1,4 @@
-#include "discovery_server.h"
+#include "discovery/discovery_server.h"
 
 #include <json-glib/json-glib.h>
 

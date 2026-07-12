@@ -17,14 +17,40 @@ pkg_check_modules(GST REQUIRED IMPORTED_TARGET
 )
 
 add_executable(camera-streamer
+    # core
     src/main.cpp
-    src/config.cpp
-    src/control_server.cpp
-    src/discovery_server.cpp
-    src/net_util.cpp
-    src/rtsp_server.cpp
-    src/v4l2_ctrl.cpp
+    src/core/application.cpp
+    # config
+    src/config/config_loader.cpp
+    # net
+    src/net/network_resolver.cpp
+    # v4l2
+    src/v4l2/v4l2_device.cpp
+    # pipeline
+    src/pipeline/pipeline_builder.cpp
+    src/pipeline/argus_source.cpp
+    src/pipeline/v4l2_source.cpp
+    src/pipeline/test_source.cpp
+    src/pipeline/source_factory.cpp
+    # rtsp
+    src/rtsp/mount_controller.cpp
+    src/rtsp/rtsp_server.cpp
+    # control
+    src/control/json_util.cpp
+    src/control/control_registry.cpp
+    src/control/control_server.cpp
+    src/control/handlers/register_handlers.cpp
+    src/control/handlers/system_handlers.cpp
+    src/control/handlers/status_handler.cpp
+    src/control/handlers/exposure_handler.cpp
+    src/control/handlers/trigger_handler.cpp
+    src/control/handlers/isp_handler.cpp
+    src/control/handlers/zoom_handler.cpp
+    src/control/handlers/v4l2_control_handler.cpp
+    # discovery
+    src/discovery/discovery_server.cpp
 )
+target_include_directories(camera-streamer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(camera-streamer PRIVATE -Wall -Wextra)
 target_compile_definitions(camera-streamer PRIVATE
     DEFAULT_CONF_PATH="${CMAKE_INSTALL_FULL_SYSCONFDIR}/camera-streamer.conf"

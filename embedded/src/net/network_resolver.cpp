@@ -1,4 +1,4 @@
-#include "net_util.h"
+#include "net/network_resolver.h"
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -12,7 +12,7 @@ constexpr const char* kEthIface = "eth0";
 
 }  // namespace
 
-std::string iface_ipv4(const std::string& iface) {
+std::string NetworkResolver::iface_ipv4(const std::string& iface) {
     struct ifaddrs* addrs = nullptr;
     if (getifaddrs(&addrs) != 0)
         return "";
@@ -31,7 +31,7 @@ std::string iface_ipv4(const std::string& iface) {
     return ip;
 }
 
-std::string resolve_listen(const std::string& listen) {
+std::string NetworkResolver::resolve_listen(const std::string& listen) {
     if (listen == "all")
         return "0.0.0.0";
     if (listen == "usb")

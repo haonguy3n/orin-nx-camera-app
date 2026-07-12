@@ -5,7 +5,7 @@
 
 #include <gio/gio.h>
 
-#include "config.h"
+#include "config/config.h"
 
 class DiscoveryServer {
 public:

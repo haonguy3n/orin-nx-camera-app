@@ -1,4 +1,8 @@
-// camera-streamer configuration (GKeyFile INI).
+// camera-streamer configuration data structures (DTOs).
+//
+// These are plain data transfer objects — no behavior, no dependencies.
+// Loading is handled by ConfigLoader (config_loader.h); runtime mutation
+// is done by the control handlers operating on Config& directly.
 #pragma once
 
 #include <map>
@@ -19,7 +23,7 @@ struct CameraConfig {
     // Sensor settings, also settable at runtime via the control protocol
     // (proto/PROTOCOL.md). argus: mapped to nvarguscamerasrc range
     // properties; v4l2: mapped to the VC driver's V4L2 controls.
-    int exposure = 0;               // µs; 0 = auto (argus) / driver default
+    int exposure = 0;               // us; 0 = auto (argus) / driver default
     double gain = 0;                // 0 = auto/default; argus: multiplier,
                                     // v4l2: raw units (VC: milli-dB, 0-48000)
     int trigger = -1;               // VC trigger mode 0..7; -1 = leave as is
@@ -49,7 +53,7 @@ struct Config {
     // (systemctl reload camera-streamer).
     std::string listen = "all";
     // RTP transport(s) the RTSP server offers: tcp (interleaved in the
-    // RTSP connection, default — survives hosts that drop unsolicited
+    // RTSP connection, default -- survives hosts that drop unsolicited
     // inbound UDP), udp, or all (client picks; gst clients prefer UDP).
     std::string transport = "tcp";
     // TCP control server (proto/PROTOCOL.md), bound to the same address as
@@ -59,8 +63,3 @@ struct Config {
     int discovery_port = 8556;
     CameraConfig cameras[kNumCameras];
 };
-
-// Loads the INI file at |path|. A missing file yields built-in defaults
-// (cam0/cam1 enabled, argus sensor-id 0/1, h265 @ 8 Mbit/s); a malformed
-// file or invalid values fall back to defaults with a warning.
-Config load_config(const std::string& path);

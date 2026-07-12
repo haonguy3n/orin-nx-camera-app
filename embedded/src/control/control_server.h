@@ -1,29 +1,21 @@
 // TCP control server implementing proto/PROTOCOL.md: newline-delimited JSON
-// request/response (exposure, gain, trigger, status, reload).
+// request/response. Handles only the transport and JSON-RPC envelope; all
+// method logic is delegated to IControlHandler instances via ControlRegistry.
 #pragma once
 
 #include <gio/gio.h>
 #include <json-glib/json-glib.h>
 
-#include <functional>
 #include <string>
 #include <unordered_set>
 
-#include "config.h"
-
-class RtspServer;
-
-// Wiring back into the application, as callbacks so this class doesn't
-// depend on main's App (whose members are replaced on reload).
-struct ControlHooks {
-    std::function<Config&()> config;    // live, mutable configuration
-    std::function<RtspServer*()> rtsp;  // current RTSP server
-    std::function<void()> reload;       // full config-file reload (= SIGHUP)
-};
+#include "control/control_context.h"
+#include "control/control_handler.h"
+#include "control/control_registry.h"
 
 class ControlServer {
 public:
-    explicit ControlServer(ControlHooks hooks);
+    ControlServer(ControlRegistry& registry, ControlContext context);
     ~ControlServer();
 
     ControlServer(const ControlServer&) = delete;
@@ -44,12 +36,9 @@ private:
     static void close_conn(Conn* conn);
 
     void process_line(Conn* conn, const char* line);
-    // Returns the result node (transfer full), or nullptr with
-    // |err_code|/|err_msg| set.
-    JsonNode* dispatch(const char* method, JsonObject* params, int* err_code,
-                       std::string* err_msg);
 
-    ControlHooks hooks_;
+    ControlRegistry& registry_;
+    ControlContext context_;
     GSocketService* service_ = nullptr;
     std::unordered_set<Conn*> conns_;
 };

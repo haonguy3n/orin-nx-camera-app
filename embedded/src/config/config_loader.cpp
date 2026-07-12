@@ -1,4 +1,4 @@
-#include "config.h"
+#include "config/config_loader.h"
 
 #include <glib.h>
 
@@ -71,7 +71,9 @@ std::string get_choice(GKeyFile* kf, const char* group, const char* key,
 
 }  // namespace
 
-Config load_config(const std::string& path) {
+FileConfigLoader::FileConfigLoader(std::string path) : path_(std::move(path)) {}
+
+Config FileConfigLoader::load() {
     Config cfg;
     // Built-in per-index defaults: cam0 -> sensor 0, cam1 -> sensor 1.
     for (int i = 0; i < Config::kNumCameras; ++i) {
@@ -81,12 +83,12 @@ Config load_config(const std::string& path) {
 
     GKeyFile* kf = g_key_file_new();
     GError* err = nullptr;
-    if (!g_key_file_load_from_file(kf, path.c_str(), G_KEY_FILE_NONE, &err)) {
+    if (!g_key_file_load_from_file(kf, path_.c_str(), G_KEY_FILE_NONE, &err)) {
         if (g_error_matches(err, G_FILE_ERROR, G_FILE_ERROR_NOENT))
-            g_message("config: %s not found, using built-in defaults", path.c_str());
+            g_message("config: %s not found, using built-in defaults", path_.c_str());
         else
             g_warning("config: failed to load %s: %s (using built-in defaults)",
-                      path.c_str(), err->message);
+                      path_.c_str(), err->message);
         g_error_free(err);
         g_key_file_free(kf);
         return cfg;
@@ -159,6 +161,6 @@ Config load_config(const std::string& path) {
     }
 
     g_key_file_free(kf);
-    g_message("config: loaded %s", path.c_str());
+    g_message("config: loaded %s", path_.c_str());
     return cfg;
 }

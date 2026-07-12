@@ -162,13 +162,60 @@ journalctl -u camera-streamer -f
 
 ```
 CMakeLists.txt
-src/main.cpp               App struct (config + servers + main loop), signals
-src/config.{h,cpp}         Config structs + GKeyFile INI loader
-src/rtsp_server.{h,cpp}    GstRTSPServer wrapper, launch strings, watchdog
-src/control_server.{h,cpp} TCP control protocol (proto/PROTOCOL.md)
-src/discovery_server.{h,cpp} UDP discovery responder
-src/v4l2_ctrl.{h,cpp}      V4L2 control get/set for the VC driver
-src/net_util.{h,cpp}       listen= -> bind-address resolution
-config/                    default + videotestsrc test configs
-systemd/                   service unit
+src/main.cpp                       Entry point: creates Application, runs it
+src/core/
+  application.{h,cpp}              Application class: lifecycle, reload, signals
+  stream_controller.h              IStreamController interface (RTSP abstraction)
+src/config/
+  config.h                         Config + CameraConfig structs (DTOs)
+  config_loader.{h,cpp}            IConfigLoader interface + FileConfigLoader (GKeyFile)
+src/net/
+  network_resolver.{h,cpp}         listen= -> bind-address resolution
+src/v4l2/
+  v4l2_device.{h,cpp}              IV4l2Device interface + V4l2Device impl (ioctl)
+  v4l2_factory.h                   IV4l2DeviceFactory interface + create function
+src/pipeline/
+  pipeline_builder.{h,cpp}         GStreamer launch string fragments (shared)
+  camera_source.h                  ICameraSource interface (Strategy pattern)
+  argus_source.{h,cpp}             Argus/ISP strategy (nvarguscamerasrc)
+  v4l2_source.{h,cpp}              V4L2 strategy (v4l2src + VC driver controls)
+  test_source.{h,cpp}              Test pattern strategy (videotestsrc, no HW)
+  source_factory.{h,cpp}           ISourceFactory interface + SourceFactory (Factory)
+src/rtsp/
+  rtsp_server.{h,cpp}              GstRTSPServer wrapper, implements IStreamController
+  mount_controller.{h,cpp}         Per-camera mount state + frame tracking + watchdog
+src/control/
+  control_server.{h,cpp}           TCP server + JSON-RPC envelope (transport only)
+  control_registry.{h,cpp}         Method name -> IControlHandler map (Registry)
+  control_handler.h                IControlHandler interface (Command pattern)
+  control_context.h                ControlContext: dependencies passed to handlers
+  json_util.{h,cpp}                JSON param extraction, result builders, error codes
+  handlers/
+    register_handlers.{h,cpp}      Registers all handlers into the registry
+    system_handlers.{h,cpp}        ping, reload
+    status_handler.{h,cpp}         get-status, get-config
+    exposure_handler.{h,cpp}       set-exposure, set-gain
+    trigger_handler.{h,cpp}        set-trigger, fire-trigger, set-sync
+    isp_handler.{h,cpp}            set-isp
+    zoom_handler.{h,cpp}           set-zoom
+    v4l2_control_handler.{h,cpp}   list-controls, get-control, set-control
+src/discovery/
+  discovery_server.{h,cpp}         UDP discovery responder
+config/                            default + videotestsrc test configs
+systemd/                           service unit
 ```
+
+### Design patterns
+
+- **Strategy** (`ICameraSource`): argus/v4l2/test source behavior is
+  encapsulated in separate strategy classes; adding a new source type is
+  a new class + factory branch, no existing code changes (OCP).
+- **Command + Registry** (`IControlHandler` + `ControlRegistry`): each
+  control protocol method is a separate handler class; the dispatch
+  if-else chain is replaced by a registry lookup. Adding a method is a
+  new class + `register_handler` call (OCP).
+- **Factory** (`ISourceFactory`, `IV4l2DeviceFactory`): creates strategy
+  objects from config; mockable for unit tests.
+- **Interface segregation** (`IStreamController`, `IConfigLoader`):
+  control handlers depend on interfaces, not concrete classes, enabling
+  unit testing with mocks (DIP).
