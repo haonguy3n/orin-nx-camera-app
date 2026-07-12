@@ -41,6 +41,11 @@ struct CameraConfig {
 // runtime (set-tuning) rewrites the file and restarts the Argus daemon —
 // a ~5 s stream interruption, unlike the instant set-isp knobs.
 struct TuningConfig {
+    // When false, camera-streamer never touches camera_overrides.isp and
+    // set-tuning is refused — for running a full professionally-calibrated
+    // file (e.g. an NVIDIA-partner Char-lite output) that must not be
+    // regenerated from these few parameters.
+    bool managed = true;
     int black_level = 60;       // sensor pedestal, 10-bit units
     double wb_trim_r = 1.1082;  // post-AWB white trim (R and B vs G)
     double wb_trim_b = 1.1276;

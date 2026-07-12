@@ -197,6 +197,10 @@ The host UI's "Calibrate whites" uses this: it measures the white-region
 channel imbalance in the decoded video, composes it with the current trim,
 applies, and iterates once (AWB partially adapts around the first pass).
 
+With `[tuning] managed=false` in the device config (a deployed
+professionally-calibrated overrides file that must not be regenerated),
+`set-tuning` fails with code `1`.
+
 ### `set-zoom`
 
 `{"camera": 0|1, "factor": <1.0–8.0>, "x": <0–1>, "y": <0–1>}` → `{}`

@@ -118,6 +118,7 @@ Config load_config(const std::string& path) {
         cfg.discovery_port = 8556;
     }
 
+    cfg.tuning.managed = get_bool(kf, "tuning", "managed", cfg.tuning.managed);
     cfg.tuning.black_level = CLAMP(
         get_int(kf, "tuning", "black-level", cfg.tuning.black_level), 0, 1023);
     cfg.tuning.wb_trim_r = CLAMP(
