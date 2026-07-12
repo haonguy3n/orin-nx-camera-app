@@ -543,6 +543,8 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
             cam.exposure = static_cast<int>(us);
         else
             cam.gain = gain;
+        if (cam.source == "argus" && rtsp != nullptr)
+            rtsp->refresh_launch(cam_idx);  // future sessions inherit it
         g_message("control: cam%d %s = %s", cam_idx,
                   exposure ? "exposure" : "gain",
                   exposure ? (std::to_string(us) + " us").c_str()
@@ -594,6 +596,8 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
         JsonNode* vn = json_object_get_member(params, "value");
         if (JSON_NODE_HOLDS_NULL(vn)) {  // forget the override
             cam.isp.erase(name);
+            if (rtsp != nullptr)
+                rtsp->refresh_launch(cam_idx);
             g_message("control: cam%d isp %s reset", cam_idx, name.c_str());
             return empty_result();
         }
@@ -614,9 +618,12 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
         }
 
         cam.isp[name] = value;
-        // Live pipeline picks it up now; otherwise the launch string will.
-        if (rtsp != nullptr)
+        // Live pipeline picks it up now; the refreshed factory launch
+        // string covers every session created afterwards.
+        if (rtsp != nullptr) {
             rtsp->set_source_property(cam_idx, name.c_str(), value.c_str());
+            rtsp->refresh_launch(cam_idx);
+        }
         g_message("control: cam%d isp %s = %s", cam_idx, name.c_str(),
                   value.c_str());
         return empty_result();

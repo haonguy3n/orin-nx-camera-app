@@ -176,6 +176,8 @@ RtspServer::~RtspServer() {
         g_object_unref(server_);
     }
     for (auto& cam : cams_) {
+        if (cam.factory != nullptr)
+            g_object_unref(cam.factory);
         g_weak_ref_clear(&cam.media);
         g_weak_ref_clear(&cam.source);
     }
@@ -307,6 +309,8 @@ bool RtspServer::start() {
         g_signal_connect(factory, "media-configure",
                          G_CALLBACK(on_media_configure), &cams_[i]);
         gst_rtsp_mount_points_add_factory(mounts, mount.c_str(), factory);
+        cams_[i].factory =
+            static_cast<GstRTSPMediaFactory*>(g_object_ref(factory));
         cams_[i].mounted = true;
 
         if (cam.source == "v4l2")
@@ -365,6 +369,14 @@ StreamStatus RtspServer::stream_status(int cam) {
         g_object_unref(media);
     }
     return s;
+}
+
+void RtspServer::refresh_launch(int cam) {
+    if (cams_[cam].factory == nullptr)
+        return;
+    const std::string launch = build_launch(config_.cameras[cam]);
+    gst_rtsp_media_factory_set_launch(cams_[cam].factory, launch.c_str());
+    g_message("/cam%d: launch refreshed: %s", cam, launch.c_str());
 }
 
 bool RtspServer::set_source_property(int cam, const char* property,

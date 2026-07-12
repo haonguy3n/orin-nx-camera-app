@@ -45,6 +45,13 @@ public:
     // later pipelines pick the value up from the launch string.
     bool set_source_property(int cam, const char* property, const char* value);
 
+    // Regenerates camera |cam|'s launch string from the (mutated) config
+    // and re-arms its media factory with it. Without this, runtime settings
+    // (set-isp / argus exposure/gain) would only reach the currently-live
+    // pipeline: the factory keeps the launch string from start(), so later
+    // sessions would revert. Takes effect for the next created media.
+    void refresh_launch(int cam);
+
     // Called (from the main loop) when a live pipeline stopped producing
     // frames; the service exits so systemd restarts it cleanly.
     void set_stall_handler(std::function<void()> handler) {
@@ -56,6 +63,7 @@ private:
         RtspServer* self = nullptr;
         int index = 0;
         bool mounted = false;
+        GstRTSPMediaFactory* factory = nullptr;  // ref held for refresh_launch
         GWeakRef media;   // live GstRTSPMedia (shared factory: one at a time)
         GWeakRef source;  // "camsrc" element inside the live pipeline
         std::atomic<guint64> frames{0};
