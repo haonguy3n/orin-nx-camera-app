@@ -45,11 +45,21 @@ MainWindow::MainWindow(QWidget *parent)
 {
     setWindowTitle(QStringLiteral("camera-viewer"));
 
+    // Opaque window background — without this, dragging the window shows
+    // the desktop through unpainted widget areas (Qt leaves container
+    // widgets transparent by default). autoFillBackground uses the
+    // current palette color, so no theme change.
+    setAutoFillBackground(true);
+
     auto *central = new QWidget(this);
+    central->setAutoFillBackground(true);
     auto *rootLayout = new QVBoxLayout(central);
+    rootLayout->setSpacing(8);
+    rootLayout->setContentsMargins(10, 10, 10, 10);
 
     // Top bar: host/URL entry + connect/disconnect toggle + discovery.
     auto *topBar = new QHBoxLayout;
+    topBar->setSpacing(8);
     auto *hostLabel = new QLabel(QStringLiteral("Device:"), central);
     m_hostEdit = new QLineEdit(QStringLiteral("192.168.55.1"), central);
     m_hostEdit->setToolTip(
@@ -67,13 +77,14 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Two video panes side by side, control panel on the right.
     auto *paneLayout = new QHBoxLayout;
+    paneLayout->setSpacing(8);
     paneLayout->addWidget(createPane(m_panes[0], QStringLiteral("cam0")), 1);
     paneLayout->addWidget(createPane(m_panes[1], QStringLiteral("cam1")), 1);
     paneLayout->addWidget(createControlPanel());
     rootLayout->addLayout(paneLayout, 1);
 
     setCentralWidget(central);
-    resize(1560, 560);
+    resize(1640, 620);
 
     // Control channel (JSON over TCP, ../proto/PROTOCOL.md) + status poll.
     m_control = new ControlClient(this);
@@ -168,14 +179,18 @@ QWidget *MainWindow::createPane(Pane &pane, const QString &name)
     pane.name = name;
 
     auto *container = new QWidget(this);
+    container->setAutoFillBackground(true);
     auto *layout = new QVBoxLayout(container);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
 
     pane.video = new QVideoWidget(container);
     pane.video->setMinimumSize(320, 240);
 
     pane.status = new QLabel(container);
     pane.status->setWordWrap(true);
+    pane.status->setStyleSheet(QStringLiteral(
+        "padding: 2px 4px; background: #f8f8f8; border-radius: 2px;"));
 
     layout->addWidget(pane.video, 1);
     layout->addWidget(pane.status);
@@ -224,18 +239,22 @@ QWidget *MainWindow::createControlPanel()
 {
     auto *panel = new QWidget;
     auto *layout = new QVBoxLayout(panel);
+    layout->setSpacing(10);  // breathing room between group boxes
+    layout->setContentsMargins(8, 8, 8, 8);
 
     // Device status: control channel state, per-camera poll results,
     // and the last request error (non-modal, no dialogs).
     auto *statusGroup = new QGroupBox(QStringLiteral("Device"), panel);
     auto *statusLayout = new QVBoxLayout(statusGroup);
+    statusLayout->setSpacing(6);
     m_controlStatus =
         new QLabel(QStringLiteral("control: disconnected"), statusGroup);
     m_deviceStatus = new QLabel(statusGroup);
     m_deviceStatus->setWordWrap(true);
     m_errorLabel = new QLabel(statusGroup);
     m_errorLabel->setWordWrap(true);
-    m_errorLabel->setStyleSheet(QStringLiteral("color: #c04040;"));
+    m_errorLabel->setStyleSheet(QStringLiteral(
+        "color: #c04040; padding: 2px 4px;"));
     m_syncCheck = new QCheckBox(QStringLiteral("Sync trigger"), statusGroup);
     m_syncCheck->setToolTip(QStringLiteral(
         "hardware-synchronized capture: all cameras → external trigger"));
@@ -266,7 +285,9 @@ QWidget *MainWindow::createControlPanel()
     scroll->setWidget(panel);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setFixedWidth(320);  // leave room for the vertical scrollbar
+    scroll->setMinimumWidth(380);
+    scroll->setFixedWidth(400);  // wide enough for nested ISP group + labels
+    panel->setMinimumWidth(380);  // keep form fields from collapsing
     return scroll;
 }
 
@@ -275,6 +296,10 @@ QWidget *MainWindow::createCameraGroup(int index)
     CameraControls &controls = m_cameraControls[index];
     controls.group = new QGroupBox(QStringLiteral("cam%1").arg(index));
     auto *form = new QFormLayout(controls.group);
+    form->setSpacing(6);
+    form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
     controls.exposure = new QSpinBox(controls.group);
     controls.exposure->setRange(0, 1000000);
@@ -325,6 +350,10 @@ QWidget *MainWindow::createCameraGroup(int index)
     // user activation, spin boxes on editingFinished with a lastSent guard.
     auto *ispGroup = new QGroupBox(QStringLiteral("ISP"), controls.group);
     auto *ispForm = new QFormLayout(ispGroup);
+    ispForm->setSpacing(6);
+    ispForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    ispForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    ispForm->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
     controls.wbMode = new QComboBox(ispGroup);
     controls.wbMode->addItem(QStringLiteral("(unchanged)"));
