@@ -9,9 +9,12 @@ Jetson ISP tuning has three layers; this recipe covers the middle one.
 2. **Static tuning file** (`camera_overrides.isp`) — lens shading, color
    correction matrix, gamma, demosaic parameters. libargus loads it from
    `/var/nvidia/nvcam/settings/` at camera open and applies it over the
-   default tuning. **This recipe installs that file** — but the file itself
-   must come from Vision Components (ask their support for the IMX296C
-   overrides matching your lens) or from an NVIDIA camera tuning partner.
+   default tuning. **This recipe installs that file.** Sources for it, in
+   order of preference: Vision Components support, an NVIDIA tuning
+   partner, or **do it yourself** — the file is plain text, and
+   `tools/isp-tuning/` (repo root) has the full DIY workflow: RAW captures
+   via the v4l2 path, scripts for black level / falloff / white balance /
+   CCM, and a commented template to start from.
 3. **Full sensor characterization** — NVIDIA's ISP tuning suite (partner
    tooling), lab targets, real hardware. Out of scope for this layer;
    its output is again a `camera_overrides.isp`, deployed the same way.

@@ -1,0 +1,50 @@
+# camera_overrides.isp — DIY starting point for the VC MIPI IMX296C
+#
+# Structure and key names follow the publicly available IMX477 calibration
+# (RidgeRun/NVIDIA-Jetson-IMX477-RPIV3); libargus loads this file from
+# /var/nvidia/nvcam/settings/camera_overrides.isp (mode 664) and applies it
+# over the default tuning. Fill the measured values in (workflow in
+# tools/isp-tuning/README.md), deploy via the vc-isp-tuning recipe.
+#
+# Argus silently ignores a file it cannot parse — after every edit, verify
+# a visible change actually happens before trusting the numbers.
+
+#-----------------------------------------------------
+# Auto exposure
+# Target mean brightness (8-bit scale) AE converges to; raise/lower for a
+# brighter/darker overall image. Equal Higher/Lower = fixed target.
+ae.MeanAlg.HigherTarget = 120;
+ae.MeanAlg.LowerTarget  = 120;
+ae.MeanAlg.ConvergeSpeed = 0.5;
+
+# Keep AE from dropping the sensor below the rate the application needs
+# (IMX296 native maximum is ~60 fps).
+defaults.autoFramerateRange = {30.0, 60.0};
+
+#-----------------------------------------------------
+# Optical black (sensor pedestal), 10-bit units and normalized float.
+# Measure with:  raw_stats.py dark dark.raw
+opticalBlack.manualBiasR  	 = 64;
+opticalBlack.manualBiasGR 	 = 64;
+opticalBlack.manualBiasGB 	 = 64;
+opticalBlack.manualBiasB  	 = 64;
+opticalBlack.float.manualBiasR	 = 0.06256109;
+opticalBlack.float.manualBiasGR	 = 0.06256109;
+opticalBlack.float.manualBiasGB	 = 0.06256109;
+opticalBlack.float.manualBiasB	 = 0.06256109;
+
+#-----------------------------------------------------
+# Color correction matrix (linear sRGB, rows sum to 1).
+# Identity = no correction; replace with the output of:
+#   compute_ccm.py chart.raw --corners ...
+colorCorrection.srgbMatrix[0]	 = {1.00000000, 0.00000000, 0.00000000};
+colorCorrection.srgbMatrix[1]	 = {0.00000000, 1.00000000, 0.00000000};
+colorCorrection.srgbMatrix[2]	 = {0.00000000, 0.00000000, 1.00000000};
+ae.PerChannelGainAdjustment = {1.0, 1.0, 1.0, 1.0};
+
+#-----------------------------------------------------
+# Lens shading: OFF until calibrated. Check whether the lens needs it at
+# all with:  raw_stats.py flat flat.raw   (corners < ~0.85 of center).
+# Calibrating the falloff_srfc.controlPoint spline surfaces by hand is the
+# hard part of DIY tuning — see the IMX477 reference file for the shape.
+ap15Function.lensShading = FALSE;
