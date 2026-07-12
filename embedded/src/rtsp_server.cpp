@@ -33,13 +33,21 @@ std::string argus_ranges(const CameraConfig& cam) {
 }
 
 // Encoder + parser + payloader tail shared by the argus and v4l2 pipelines.
-// nvv4l2h26xenc bitrate is in bit/s.
+// nvv4l2h26xenc bitrate is in bit/s. The queues are load-bearing, not
+// cosmetic: inside gst-rtsp-server the whole chain shares one streaming
+// thread, and without a queue in front of the encoder the NVMM buffer pool
+// starves after the first frame (source blocks waiting for a free buffer
+// while the encoder blocks on downstream) — observed as a one-packet
+// stream and a stalled pipeline on target.
 std::string nvenc_tail(const CameraConfig& cam) {
     const bool h265 = cam.codec == "h265";
-    std::string s = h265 ? "nvv4l2h265enc" : "nvv4l2h264enc";
+    std::string s = "queue ! ";
+    s += h265 ? "nvv4l2h265enc" : "nvv4l2h264enc";
     s += " bitrate=" + std::to_string(cam.bitrate) +
-         " insert-sps-pps=true idrinterval=30 ! ";
-    s += h265 ? "h265parse ! rtph265pay" : "h264parse ! rtph264pay";
+         " insert-sps-pps=true idrinterval=30 maxperf-enable=true ! ";
+    s += h265 ? "h265parse" : "h264parse";
+    s += " ! queue ! ";
+    s += h265 ? "rtph265pay" : "rtph264pay";
     s += " name=pay0 pt=96";
     return s;
 }
@@ -69,12 +77,14 @@ std::string build_launch(const CameraConfig& cam) {
     } else {  // test: software pipeline, runs on any host (CI / development).
         const bool h265 = cam.codec == "h265";
         p += "videotestsrc name=camsrc is-live=true ! video/x-raw," +
-             caps_tail(cam) + " ! videoconvert ! ";
+             caps_tail(cam) + " ! videoconvert ! queue ! ";
         // x26xenc bitrate is in kbit/s.
         p += std::string(h265 ? "x265enc" : "x264enc") +
              " tune=zerolatency key-int-max=30 bitrate=" +
              std::to_string(cam.bitrate / 1000) + " ! ";
-        p += h265 ? "h265parse ! rtph265pay" : "h264parse ! rtph264pay";
+        p += h265 ? "h265parse" : "h264parse";
+        p += " ! queue ! ";
+        p += h265 ? "rtph265pay" : "rtph264pay";
         p += " name=pay0 pt=96";
     }
     p += " )";
