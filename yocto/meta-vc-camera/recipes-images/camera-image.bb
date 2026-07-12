@@ -10,6 +10,10 @@ DESCRIPTION = "demo-image-base plus: NVIDIA GStreamer elements (Argus source, \
 VIC conversion, V4L2 NVENC/NVDEC, sinks), gst-rtsp-server, v4l-utils, the USB \
 gadget (CDC-NCM + ACM) and the camera-streamer application."
 
+# Remote debugging/administration over the USB or ethernet link. Root login
+# permissions come from the distro's EXTRA_IMAGE_FEATURES (dev images).
+IMAGE_FEATURES += "ssh-server-openssh"
+
 # NVIDIA element package names verified in
 # meta-tegra/recipes-multimedia/gstreamer/ on scarthgap-l4t-r35.x (r35.6.4).
 IMAGE_INSTALL += " \
