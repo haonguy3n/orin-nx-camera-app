@@ -280,6 +280,19 @@ bool RtspServer::start() {
 
         GstRTSPMediaFactory* factory = gst_rtsp_media_factory_new();
         gst_rtsp_media_factory_set_launch(factory, launch.c_str());
+        // Offered RTP transports. TCP-interleaved by default: hosts with
+        // stateful inbound-UDP filtering silently lose UDP RTP (server
+        // sends, client never receives), and clients auto-negotiate TCP
+        // when UDP isn't offered.
+        GstRTSPLowerTrans trans = GST_RTSP_LOWER_TRANS_TCP;
+        if (config_.transport == "udp")
+            trans = static_cast<GstRTSPLowerTrans>(GST_RTSP_LOWER_TRANS_UDP |
+                                                   GST_RTSP_LOWER_TRANS_UDP_MCAST);
+        else if (config_.transport == "all")
+            trans = static_cast<GstRTSPLowerTrans>(GST_RTSP_LOWER_TRANS_UDP |
+                                                   GST_RTSP_LOWER_TRANS_UDP_MCAST |
+                                                   GST_RTSP_LOWER_TRANS_TCP);
+        gst_rtsp_media_factory_set_protocols(factory, trans);
         // One pipeline per mount regardless of client count, so multiple
         // clients don't re-open the sensor.
         gst_rtsp_media_factory_set_shared(factory, TRUE);

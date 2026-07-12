@@ -43,6 +43,7 @@ ships in `config/camera-streamer.conf`. All keys:
 |---|---|---|---|
 | `[server]` | `port` | `8554` | RTSP listen port |
 | | `listen` | `all` | network to serve on: `all` (USB + ethernet at once), `usb` (usb0 only), `ethernet` (eth0 only), or an explicit IPv4 address / interface name |
+| | `transport` | `tcp` | RTP transport offered: `tcp` (interleaved, firewall-proof), `udp`, or `all` (client picks) |
 | | `control-port` | `8555` | TCP control protocol port, same bind address as RTSP; `0` disables |
 | | `discovery-port` | `8556` | UDP discovery responder (always 0.0.0.0); `0` disables |
 | `[cam0]`/`[cam1]` | `enabled` | `true` | serve this camera at `/cam0`/`/cam1` |

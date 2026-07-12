@@ -42,6 +42,10 @@ struct Config {
     // Switch at runtime by editing the file and sending SIGHUP
     // (systemctl reload camera-streamer).
     std::string listen = "all";
+    // RTP transport(s) the RTSP server offers: tcp (interleaved in the
+    // RTSP connection, default — survives hosts that drop unsolicited
+    // inbound UDP), udp, or all (client picks; gst clients prefer UDP).
+    std::string transport = "tcp";
     // TCP control server (proto/PROTOCOL.md), bound to the same address as
     // the RTSP server. 0 disables it.
     int control_port = 8555;

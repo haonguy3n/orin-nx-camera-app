@@ -108,6 +108,8 @@ Config load_config(const std::string& path) {
                   cfg.control_port);
         cfg.control_port = 8555;
     }
+    cfg.transport = get_choice(kf, "server", "transport", cfg.transport,
+                               {"tcp", "udp", "all"});
     cfg.discovery_port =
         get_int(kf, "server", "discovery-port", cfg.discovery_port);
     if (cfg.discovery_port < 0 || cfg.discovery_port > 65535) {
