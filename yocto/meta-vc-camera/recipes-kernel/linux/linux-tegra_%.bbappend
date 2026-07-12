@@ -57,3 +57,10 @@ do_patch:append() {
     cp -f ${WORKDIR}/tegra234-camera-vc-mipi-cam.dtsi \
           ${S}/nvidia/platform/t23x/p3768/kernel-dts/cvb/
 }
+
+# NVIDIA's custom dtb-overlays make target doesn't declare a dependency on
+# scripts/dtc, so whenever dtc needs rebuilding within the same pass (any
+# DT re-patch invalidating the kernel workdir), parallel make can exec dtc
+# while relinking it -> transient "Permission denied" in
+# do_compile_devicetree_overlays. Overlay compilation is cheap; serialize it.
+PARALLEL_MAKE:task-compile_devicetree_overlays = ""
