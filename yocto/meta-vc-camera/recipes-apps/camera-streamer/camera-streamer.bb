@@ -7,7 +7,7 @@ HOMEPAGE = "https://github.com/haonguy3n/camera-app"
 # source tree carries a LICENSE file.
 LICENSE = "CLOSED"
 
-PV = "0.1"
+PV = "0.2"
 
 inherit cmake pkgconfig systemd externalsrc
 
@@ -23,10 +23,13 @@ inherit cmake pkgconfig systemd externalsrc
 # layer is ever moved out of the repo, override EXTERNALSRC in local.conf.
 EXTERNALSRC = "${@os.path.normpath(os.path.join(os.path.realpath(d.getVar('VC_CAMERA_LAYERDIR')), '..', '..', 'embedded'))}"
 
+# json-glib + glib (gio) serve the TCP control protocol (proto/PROTOCOL.md).
 DEPENDS = " \
+    glib-2.0 \
     gstreamer1.0 \
     gstreamer1.0-plugins-base \
     gstreamer1.0-rtsp-server \
+    json-glib \
 "
 
 # Pipeline runtime elements: rtph265pay lives in -good (rtp), h265parse in

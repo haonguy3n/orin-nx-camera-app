@@ -1,19 +1,21 @@
 # camera-streamer
 
-RTSP streaming service for the Jetson Orin NX camera device (milestone 1, see
-`../DESIGN.md`). Serves one hardware-encoded H.265/H.264 stream per camera:
+RTSP streaming service for the Jetson Orin NX camera device (milestones 1-2,
+see `../DESIGN.md`). Serves one hardware-encoded H.265/H.264 stream per
+camera, plus a TCP control channel for runtime camera settings:
 
 ```
 rtsp://192.168.55.1:8554/cam0
 rtsp://192.168.55.1:8554/cam1
+tcp://192.168.55.1:8555        (control protocol, ../proto/PROTOCOL.md)
 ```
 
 ## Build
 
 Dependencies: CMake >= 3.16, a C++17 compiler, and dev packages for
-`gstreamer-1.0` and `gstreamer-rtsp-server-1.0` (Debian/Ubuntu:
-`libgstreamer1.0-dev libgstrtspserver-1.0-dev`; Arch: `gstreamer`
-`gst-rtsp-server`).
+`gstreamer-1.0`, `gstreamer-rtsp-server-1.0` and `json-glib-1.0`
+(Debian/Ubuntu: `libgstreamer1.0-dev libgstrtspserver-1.0-dev
+libjson-glib-dev`; Arch: `gstreamer` `gst-rtsp-server` `json-glib`).
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -41,6 +43,7 @@ ships in `config/camera-streamer.conf`. All keys:
 |---|---|---|---|
 | `[server]` | `port` | `8554` | RTSP listen port |
 | | `listen` | `all` | network to serve on: `all` (USB + ethernet at once), `usb` (usb0 only), `ethernet` (eth0 only), or an explicit IPv4 address / interface name |
+| | `control-port` | `8555` | TCP control protocol port, same bind address as RTSP; `0` disables |
 | `[cam0]`/`[cam1]` | `enabled` | `true` | serve this camera at `/cam0`/`/cam1` |
 | | `source` | `argus` | `argus` (nvarguscamerasrc/ISP), `v4l2` (v4l2src, best-effort in M1), `test` (videotestsrc + software encoder, no hardware needed) |
 | | `sensor-id` | `0` / `1` | argus only: nvarguscamerasrc sensor-id |
@@ -50,9 +53,37 @@ ships in `config/camera-streamer.conf`. All keys:
 | | `framerate` | `60` | frames per second (integer) |
 | | `codec` | `h265` | `h265` or `h264` |
 | | `bitrate` | `8000000` | encoder target, bit/s |
+| | `exposure` | `0` | µs; `0` = auto (argus) / driver default (v4l2) |
+| | `gain` | `0` | `0` = auto/default; argus: analog gain multiplier, v4l2: raw VC driver units (0.1 dB) |
+| | `trigger` | `-1` | VC hardware trigger mode 0–7, v4l2 source only; `-1` = leave driver default |
 
 The final GStreamer launch string for every mount is logged at startup —
 useful for reproducing issues with plain `gst-launch-1.0`.
+
+## Control protocol (M2)
+
+`../proto/PROTOCOL.md` defines the newline-delimited JSON protocol on port
+8555: `get-status` (per-camera streaming state and frame counters),
+`set-exposure` / `set-gain` / `set-trigger`, generic
+`list-controls`/`get-control`/`set-control` for everything else the VC
+driver exposes, and `reload`. It is plain enough to drive by hand:
+
+```sh
+printf '{"id":1,"method":"set-exposure","params":{"camera":0,"us":5000}}\n' \
+    | nc -q1 192.168.55.1 8555
+```
+
+Exposure/gain on the `argus` path pin the matching `nvarguscamerasrc` 3A
+range on the live pipeline (and seed future pipelines); on the `v4l2` path
+they go straight to the VC driver's V4L2 controls. Hardware trigger modes
+are v4l2-only — Argus owns the sensor timing.
+
+## Watchdog
+
+A live PLAYING pipeline that pushes no buffer for 15 s is declared stalled:
+the service logs a critical message and exits non-zero, and systemd's
+`Restart=on-failure` brings it back with a clean pipeline. Paused or idle
+mounts are not stalls.
 
 ### Runtime reconfiguration (USB ↔ ethernet switch)
 
@@ -117,12 +148,12 @@ journalctl -u camera-streamer -f
 
 ```
 CMakeLists.txt
-src/main.cpp            App struct (config + RTSP server + main loop), signals
-src/config.{h,cpp}      Config structs + GKeyFile INI loader
-src/rtsp_server.{h,cpp} GstRTSPServer wrapper, launch-string construction
-config/                 default + videotestsrc test configs
-systemd/                service unit
+src/main.cpp               App struct (config + servers + main loop), signals
+src/config.{h,cpp}         Config structs + GKeyFile INI loader
+src/rtsp_server.{h,cpp}    GstRTSPServer wrapper, launch strings, watchdog
+src/control_server.{h,cpp} TCP control protocol (proto/PROTOCOL.md)
+src/v4l2_ctrl.{h,cpp}      V4L2 control get/set for the VC driver
+src/net_util.{h,cpp}       listen= -> bind-address resolution
+config/                    default + videotestsrc test configs
+systemd/                   service unit
 ```
-
-Milestone 2 (TCP control server for exposure/gain/trigger) plugs in as another
-member of `App` next to `rtsp`; no restructuring needed.

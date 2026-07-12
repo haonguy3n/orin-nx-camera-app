@@ -31,6 +31,19 @@ bool get_bool(GKeyFile* kf, const char* group, const char* key, bool def) {
     return v != FALSE;
 }
 
+double get_double(GKeyFile* kf, const char* group, const char* key, double def) {
+    GError* err = nullptr;
+    double v = g_key_file_get_double(kf, group, key, &err);
+    if (err) {
+        if (!g_error_matches(err, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_KEY_NOT_FOUND) &&
+            !g_error_matches(err, G_KEY_FILE_ERROR, G_KEY_FILE_ERROR_GROUP_NOT_FOUND))
+            g_warning("config: [%s] %s: %s (using %g)", group, key, err->message, def);
+        g_error_free(err);
+        return def;
+    }
+    return v;
+}
+
 std::string get_string(GKeyFile* kf, const char* group, const char* key,
                        const std::string& def) {
     gchar* v = g_key_file_get_string(kf, group, key, nullptr);
@@ -87,6 +100,12 @@ Config load_config(const std::string& path) {
     cfg.listen = get_string(kf, "server", "listen", cfg.listen);
     if (cfg.listen.empty())
         cfg.listen = "all";
+    cfg.control_port = get_int(kf, "server", "control-port", cfg.control_port);
+    if (cfg.control_port < 0 || cfg.control_port > 65535) {
+        g_warning("config: [server] control-port %d out of range (using 8555)",
+                  cfg.control_port);
+        cfg.control_port = 8555;
+    }
 
     for (int i = 0; i < Config::kNumCameras; ++i) {
         char group[8];
@@ -103,6 +122,9 @@ Config load_config(const std::string& path) {
         cam.framerate = get_int(kf, group, "framerate", cam.framerate);
         cam.codec = get_choice(kf, group, "codec", cam.codec, {"h265", "h264"});
         cam.bitrate = get_int(kf, group, "bitrate", cam.bitrate);
+        cam.exposure = get_int(kf, group, "exposure", cam.exposure);
+        cam.gain = get_double(kf, group, "gain", cam.gain);
+        cam.trigger = get_int(kf, group, "trigger", cam.trigger);
     }
 
     g_key_file_free(kf);

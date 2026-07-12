@@ -1,8 +1,8 @@
 # host-ui — camera-viewer
 
-Milestone-1 host-side viewer for the dual-camera device (see `../DESIGN.md`,
-section 5). Qt 6 Widgets + Qt Multimedia (QMediaPlayer + QVideoWidget); no QML,
-no direct GStreamer dependency. Qt 6 decodes via its FFmpeg media backend, which
+Host-side viewer and device control for the dual-camera device (see
+`../DESIGN.md`, sections 4–5). Qt 6 Widgets + Qt Multimedia (QMediaPlayer +
+QVideoWidget); no QML, no direct GStreamer dependency. Qt 6 decodes via its FFmpeg media backend, which
 handles the device's H.265/H.264 RTSP streams; there are no public low-latency
 tuning knobs on QMediaPlayer — acceptable for M1.
 
@@ -18,9 +18,9 @@ and mounts) or an `rtsp://host:port` base URL.
 
 ## Build
 
-Requires: CMake ≥ 3.16, a C++17 compiler, Qt 6 with the Widgets, Multimedia and
-MultimediaWidgets modules (Arch: `qt6-base`, `qt6-multimedia`; make sure the
-FFmpeg backend package `qt6-multimedia-ffmpeg` is installed).
+Requires: CMake ≥ 3.16, a C++17 compiler, Qt 6 with the Widgets, Multimedia,
+MultimediaWidgets and Network modules (Arch: `qt6-base`, `qt6-multimedia`; make
+sure the FFmpeg backend package `qt6-multimedia-ffmpeg` is installed).
 
 ```sh
 cmake -S host-ui -B host-ui/build
@@ -53,8 +53,18 @@ test source, or GStreamer's `gst-rtsp-server` examples with `videotestsrc !
 x264enc`; then enter that server's `rtsp://host:port` in the URL bar (streams
 must be mounted at `/cam0` and `/cam1`).
 
-## Milestone 2 roadmap
+## Control panel (M2)
 
-- Controls pane: exposure, gain, trigger mode via the protobuf-over-TCP control
-  channel (shared schema in `../proto/`), alongside the two video panes.
+A panel on the right of the video panes talks to the device's control channel:
+newline-delimited JSON over TCP, port **8555** (protocol reference:
+`../proto/PROTOCOL.md`). **Connect** opens it alongside the RTSP streams (same
+host as the video; the control port is always 8555). While connected, the panel
+polls `get-status` every 2 s (per-camera streaming state and frame counter) and
+offers per-camera exposure (µs, 0 = auto), gain (0 = auto) and hardware trigger
+mode (`v4l2` source only). Request errors are shown inline in the Device status
+group — no dialogs. Exposure/gain are seeded once from the first `get-status`
+after connect.
+
+## Milestone 2 roadmap (remaining)
+
 - Per-pane stream stats and reconnect-on-stall handling.

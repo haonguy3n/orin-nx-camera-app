@@ -238,10 +238,16 @@ camera-streamer
 │     ├── ArgusSource   (nvarguscamerasrc bin)
 │     └── V4l2Source    (v4l2src bin + VC trigger-mode V4L2 controls)
 ├── stream/         RtspServer (gst-rtsp-server, /cam0 /cam1)
-├── control/        ControlServer — TCP, protobuf messages   [milestone 2]
-│                     get/set exposure, gain, trigger mode, start/stop, stats
-└── health/         watchdog: pipeline stall detection → restart; journald logging
+├── control/        ControlServer — TCP, newline-delimited JSON   [done, M2]
+│                     get/set exposure, gain, trigger mode, status, reload
+└── health/         watchdog: pipeline stall detection → exit → systemd restart
 ```
+
+The control channel shipped as **newline-delimited JSON over TCP (port
+8555)** instead of protobuf — same wire role, but no codegen, no extra host
+dependency (Qt ships JSON, json-glib is in oe-core), and debuggable with
+`nc`. The schema lives in `proto/PROTOCOL.md` (shared by both sides), and
+the door to protobuf stays open if the protocol ever outgrows JSON.
 
 Design notes:
 
@@ -267,7 +273,8 @@ Design notes:
   (`rtspsrc latency=0 ! decodebin ! glsinkbin`/`qml6glsink`) so latency is controllable
   and pipeline knowledge is shared with the device side.
 - Two video panes (cam0/cam1), connection panel (fixed 192.168.55.1 for M1), controls
-  pane speaking the protobuf-over-TCP protocol (M2).
+  pane speaking the JSON-over-TCP protocol (`proto/PROTOCOL.md`, M2): status polling,
+  exposure/gain per camera, hardware trigger mode.
 - Plain desktop app in `host-ui/`, not part of the Yocto build; shares `proto/` with
   the embedded app.
 
@@ -284,8 +291,9 @@ Design notes:
 4. `camera-streamer` v0: RTSP server, one camera, H.265 60 fps; host plays it with
    `ffplay rtsp://192.168.55.1:8554/cam0` (no UI needed to close M1).
 
-**M2 — dual streams + host UI**: second camera concurrently, Qt UI dual view, control
-channel (exposure/gain/trigger).
+**M2 — dual streams + host UI** *(implemented, pending on-target verification)*:
+second camera concurrently, Qt UI dual view + control panel, JSON/TCP control
+channel (exposure/gain/trigger, status, reload), pipeline stall watchdog.
 
 **M3 — productization**: hardware-triggered sync capture, frame metadata (timestamp,
 sequence), device discovery, OTA (RAUC/Mender on meta-tegra), factory flash flow.

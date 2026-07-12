@@ -14,6 +14,14 @@ struct CameraConfig {
     int framerate = 60;
     std::string codec = "h265";     // h265 | h264
     int bitrate = 8000000;          // bit/s
+
+    // Sensor settings, also settable at runtime via the control protocol
+    // (proto/PROTOCOL.md). argus: mapped to nvarguscamerasrc range
+    // properties; v4l2: mapped to the VC driver's V4L2 controls.
+    int exposure = 0;               // µs; 0 = auto (argus) / driver default
+    double gain = 0;                // 0 = auto/default; argus: multiplier,
+                                    // v4l2: raw control units (VC: 0.1 dB)
+    int trigger = -1;               // VC trigger mode 0..7; -1 = leave as is
 };
 
 struct Config {
@@ -28,6 +36,9 @@ struct Config {
     // Switch at runtime by editing the file and sending SIGHUP
     // (systemctl reload camera-streamer).
     std::string listen = "all";
+    // TCP control server (proto/PROTOCOL.md), bound to the same address as
+    // the RTSP server. 0 disables it.
+    int control_port = 8555;
     CameraConfig cameras[kNumCameras];
 };
 

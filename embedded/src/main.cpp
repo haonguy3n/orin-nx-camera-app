@@ -9,20 +9,81 @@
 #include <memory>
 
 #include "config.h"
+#include "control_server.h"
 #include "rtsp_server.h"
 
 #ifndef DEFAULT_CONF_PATH
 #define DEFAULT_CONF_PATH "/etc/camera-streamer.conf"
 #endif
 
-// Owns everything with process lifetime. M2 adds the TCP control server as
-// another member alongside `rtsp`.
+// Owns everything with process lifetime.
 struct App {
     std::string conf_path;
     Config config;
     std::unique_ptr<RtspServer> rtsp;
+    std::unique_ptr<ControlServer> control;
     GMainLoop* loop = nullptr;
+    int exit_code = 0;
 };
+
+static void do_reload(App* app);
+
+// Brings up the RTSP server and (unless control-port=0) the control server
+// on the same address, from app->config.
+static bool start_servers(App* app) {
+    app->rtsp = std::make_unique<RtspServer>(app->config);
+    app->rtsp->set_stall_handler([app]() {
+        app->exit_code = 1;  // systemd Restart=on-failure gives a clean slate
+        g_main_loop_quit(app->loop);
+    });
+    if (!app->rtsp->start()) {
+        app->rtsp.reset();
+        return false;
+    }
+
+    if (app->config.control_port > 0) {
+        ControlHooks hooks;
+        hooks.config = [app]() -> Config& { return app->config; };
+        hooks.rtsp = [app]() { return app->rtsp.get(); };
+        hooks.reload = [app]() { do_reload(app); };
+        app->control = std::make_unique<ControlServer>(std::move(hooks));
+        if (!app->control->start(app->rtsp->bound_address(),
+                                 app->config.control_port)) {
+            app->control.reset();
+            app->rtsp.reset();
+            return false;
+        }
+    }
+    return true;
+}
+
+static void stop_servers(App* app) {
+    app->control.reset();  // before rtsp: its hooks reach into the App
+    app->rtsp.reset();
+}
+
+// Reload = re-read the config file and re-serve (systemctl reload, SIGHUP,
+// or the control protocol's "reload"). This is how the service switches
+// interface (listen=usb/ethernet/all) or pipeline settings at runtime;
+// connected clients are dropped on purpose.
+static void do_reload(App* app) {
+    g_message("reload: re-reading %s", app->conf_path.c_str());
+
+    Config previous = app->config;
+    app->config = load_config(app->conf_path);
+
+    stop_servers(app);  // release the ports before rebinding
+    if (!start_servers(app)) {
+        g_printerr("reload: new config failed, reverting\n");
+        app->config = previous;
+        stop_servers(app);
+        if (!start_servers(app)) {
+            g_printerr("reload: revert failed too, exiting\n");
+            app->exit_code = 1;
+            g_main_loop_quit(app->loop);  // systemd restarts us
+        }
+    }
+}
 
 static gboolean on_signal(gpointer user_data) {
     auto* app = static_cast<App*>(user_data);
@@ -31,28 +92,8 @@ static gboolean on_signal(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
-// SIGHUP = reload config and re-serve (systemctl reload camera-streamer).
-// This is how the RTSP service switches interface (listen=usb/ethernet/all)
-// or pipeline settings at runtime; connected clients are dropped on purpose.
 static gboolean on_reload(gpointer user_data) {
-    auto* app = static_cast<App*>(user_data);
-    g_message("reload: re-reading %s", app->conf_path.c_str());
-
-    Config previous = app->config;
-    app->config = load_config(app->conf_path);
-
-    app->rtsp.reset();  // release the port before rebinding
-    app->rtsp = std::make_unique<RtspServer>(app->config);
-    if (!app->rtsp->start()) {
-        g_printerr("reload: new config failed, reverting\n");
-        app->config = previous;
-        app->rtsp.reset();
-        app->rtsp = std::make_unique<RtspServer>(app->config);
-        if (!app->rtsp->start()) {
-            g_printerr("reload: revert failed too, exiting\n");
-            g_main_loop_quit(app->loop);  // systemd restarts us
-        }
-    }
+    do_reload(static_cast<App*>(user_data));
     return G_SOURCE_CONTINUE;
 }
 
@@ -63,8 +104,7 @@ int main(int argc, char* argv[]) {
     app.conf_path = argc > 1 ? argv[1] : DEFAULT_CONF_PATH;
     app.config = load_config(app.conf_path);
 
-    app.rtsp = std::make_unique<RtspServer>(app.config);
-    if (!app.rtsp->start())
+    if (!start_servers(&app))
         return 1;  // systemd Restart=on-failure retries (e.g. DHCP not up yet)
 
     app.loop = g_main_loop_new(nullptr, FALSE);
@@ -75,8 +115,8 @@ int main(int argc, char* argv[]) {
     g_main_loop_run(app.loop);
 
     g_message("exiting");
-    app.rtsp.reset();
+    stop_servers(&app);
     g_main_loop_unref(app.loop);
     gst_deinit();
-    return 0;
+    return app.exit_code;
 }

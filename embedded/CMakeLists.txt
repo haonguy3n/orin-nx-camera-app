@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(camera-streamer VERSION 0.1.0 LANGUAGES CXX)
+project(camera-streamer VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,17 +10,24 @@ include(GNUInstallDirs)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GST REQUIRED IMPORTED_TARGET
     gstreamer-1.0
+    gstreamer-rtsp-1.0
     gstreamer-rtsp-server-1.0
+    gio-2.0
+    json-glib-1.0
 )
 
 add_executable(camera-streamer
     src/main.cpp
     src/config.cpp
+    src/control_server.cpp
+    src/net_util.cpp
     src/rtsp_server.cpp
+    src/v4l2_ctrl.cpp
 )
 target_compile_options(camera-streamer PRIVATE -Wall -Wextra)
 target_compile_definitions(camera-streamer PRIVATE
     DEFAULT_CONF_PATH="${CMAKE_INSTALL_FULL_SYSCONFDIR}/camera-streamer.conf"
+    APP_VERSION="${PROJECT_VERSION}"
 )
 target_link_libraries(camera-streamer PRIVATE PkgConfig::GST)
 
