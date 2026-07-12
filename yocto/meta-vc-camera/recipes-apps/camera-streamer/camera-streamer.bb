@@ -33,10 +33,17 @@ DEPENDS = " \
 "
 
 # Pipeline runtime elements: rtph265pay lives in -good (rtp), h265parse in
-# -bad (videoparsersbad). The NVIDIA elements (nvarguscamerasrc, nvv4l2h265enc,
+# -bad (videoparsersbad), and gst-rtsp-server itself builds its serving
+# pipeline out of rtpbin (-good rtpmanager) + udpsink (-good udp) + the
+# rtsp plugin — without those every mount 503s with "failed to create
+# element 'rtpbin'" (found on-target). queue is in coreelements (always
+# present). The NVIDIA elements (nvarguscamerasrc, nvv4l2h265enc,
 # nvvidconv) are machine-specific and pulled in by camera-image instead.
 RDEPENDS:${PN} += " \
     gstreamer1.0-plugins-good-rtp \
+    gstreamer1.0-plugins-good-rtpmanager \
+    gstreamer1.0-plugins-good-rtsp \
+    gstreamer1.0-plugins-good-udp \
     gstreamer1.0-plugins-bad-videoparsersbad \
 "
 
