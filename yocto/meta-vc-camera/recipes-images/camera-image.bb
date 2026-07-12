@@ -24,7 +24,8 @@ IMAGE_INSTALL += " \
     camera-streamer \
 "
 
-# Static ISP tuning for the color IMX296C. Uncomment once VC's
-# camera_overrides.isp is dropped into
-# recipes-bsp/isp-tuning/files/ (see the README there).
-#IMAGE_INSTALL += "vc-isp-tuning"
+# Static ISP tuning for the color IMX296C: currently the DIY black-level
+# override (sensor pedestal subtraction — fixes the pink haze), measured
+# and verified on target 2026-07-12. Extend the file via tools/isp-tuning
+# (WB/CCM calibration with a ColorChecker) as tuning progresses.
+IMAGE_INSTALL += "vc-isp-tuning"
