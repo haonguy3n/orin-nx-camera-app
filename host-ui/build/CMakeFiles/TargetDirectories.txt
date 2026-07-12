@@ -1,0 +1,5 @@
+/home/hao/Projects/camera-app/host-ui/build/CMakeFiles/camera-viewer.dir
+/home/hao/Projects/camera-app/host-ui/build/CMakeFiles/edit_cache.dir
+/home/hao/Projects/camera-app/host-ui/build/CMakeFiles/rebuild_cache.dir
+/home/hao/Projects/camera-app/host-ui/build/CMakeFiles/camera-viewer_autogen_timestamp_deps.dir
+/home/hao/Projects/camera-app/host-ui/build/CMakeFiles/camera-viewer_autogen.dir

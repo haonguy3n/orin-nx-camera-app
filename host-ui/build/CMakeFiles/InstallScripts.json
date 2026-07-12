@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/hao/Projects/camera-app/host-ui/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

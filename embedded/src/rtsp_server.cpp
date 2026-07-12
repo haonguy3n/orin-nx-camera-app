@@ -69,11 +69,15 @@ std::string build_launch(const CameraConfig& cam) {
              " ! video/x-raw(memory:NVMM)," + caps_tail(cam) + " ! " +
              nvenc_tail(cam);
     } else if (cam.source == "v4l2") {
-        // Best-effort for M1: let v4l2src/nvvidconv negotiate the raw format,
-        // convert into NVMM for the HW encoder.
-        p += "v4l2src name=camsrc device=" + cam.device + " ! video/x-raw," +
-             caps_tail(cam) +
-             " ! nvvidconv ! video/x-raw(memory:NVMM) ! " + nvenc_tail(cam);
+        // GRAY8 explicitly: the mono IMX296's native 10-bit grey (Y10) has
+        // no v4l2src mapping, so an unconstrained video/x-raw fails caps
+        // negotiation (mount answers 503). The VC driver also serves 8-bit
+        // grey, which v4l2src and nvvidconv both handle; nvvidconv converts
+        // into NVMM NV12 for the encoder.
+        p += "v4l2src name=camsrc device=" + cam.device +
+             " ! video/x-raw,format=GRAY8," + caps_tail(cam) +
+             " ! nvvidconv ! video/x-raw(memory:NVMM),format=NV12 ! " +
+             nvenc_tail(cam);
     } else {  // test: software pipeline, runs on any host (CI / development).
         const bool h265 = cam.codec == "h265";
         p += "videotestsrc name=camsrc is-live=true ! video/x-raw," +
@@ -204,7 +208,11 @@ void RtspServer::on_media_configure(GstRTSPMediaFactory* /*factory*/,
     gst_object_unref(bin);
 
     g_signal_connect(media, "unprepared", G_CALLBACK(on_media_unprepared), cam);
-    g_message("/cam%d: pipeline created", cam->index);
+    // src/pay presence diagnoses why runtime controls / frame counters
+    // would not engage (both should always be found).
+    g_message("/cam%d: pipeline created (camsrc %s, pay0 %s)", cam->index,
+              src != nullptr ? "found" : "MISSING",
+              pay != nullptr ? "probed" : "MISSING");
 }
 
 void RtspServer::on_media_unprepared(GstRTSPMedia* /*media*/,

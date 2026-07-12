@@ -39,7 +39,11 @@ DEPENDS = " \
 # element 'rtpbin'" (found on-target). queue is in coreelements (always
 # present). The NVIDIA elements (nvarguscamerasrc, nvv4l2h265enc,
 # nvvidconv) are machine-specific and pulled in by camera-image instead.
+# -base-app provides appsrc/appsink, which gst-rtsp-server needs for the
+# TCP-interleaved transport (the default): without it every TCP client got
+# a broken media graph (GST_IS_ELEMENT assertion cascade, no data).
 RDEPENDS:${PN} += " \
+    gstreamer1.0-plugins-base-app \
     gstreamer1.0-plugins-good-rtp \
     gstreamer1.0-plugins-good-rtpmanager \
     gstreamer1.0-plugins-good-rtsp \

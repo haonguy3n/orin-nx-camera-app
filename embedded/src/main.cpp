@@ -5,6 +5,7 @@
 
 #include <glib-unix.h>
 #include <gst/gst.h>
+#include <unistd.h>
 
 #include <memory>
 
@@ -34,9 +35,11 @@ static void do_reload(App* app);
 // on the same address, from app->config.
 static bool start_servers(App* app) {
     app->rtsp = std::make_unique<RtspServer>(app->config);
-    app->rtsp->set_stall_handler([app]() {
-        app->exit_code = 1;  // systemd Restart=on-failure gives a clean slate
-        g_main_loop_quit(app->loop);
+    app->rtsp->set_stall_handler([]() {
+        // Hard exit, no orderly teardown: dismantling GStreamer around a
+        // stalled pipeline crashed with SIGBUS on target, and systemd
+        // restarts us either way — a wedged process must not linger.
+        _exit(1);
     });
     if (!app->rtsp->start()) {
         app->rtsp.reset();
