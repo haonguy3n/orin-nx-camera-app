@@ -36,21 +36,6 @@ struct CameraConfig {
     double zoom_y = 0.5;
 };
 
-// Deep ISP tuning that lives in libargus's camera_overrides.isp (defaults
-// mirror the file shipped by the vc-isp-tuning recipe). Changing these at
-// runtime (set-tuning) rewrites the file and restarts the Argus daemon —
-// a ~5 s stream interruption, unlike the instant set-isp knobs.
-struct TuningConfig {
-    int black_level = 60;       // sensor pedestal, 10-bit units
-    double wb_trim_r = 1.1082;  // post-AWB white trim (R and B vs G)
-    double wb_trim_b = 1.1276;
-
-    bool operator==(const TuningConfig& o) const {
-        return black_level == o.black_level && wb_trim_r == o.wb_trim_r &&
-               wb_trim_b == o.wb_trim_b;
-    }
-};
-
 struct Config {
     static constexpr int kNumCameras = 2;
 
@@ -72,7 +57,6 @@ struct Config {
     int control_port = 8555;
     // UDP discovery responder (always 0.0.0.0). 0 disables it.
     int discovery_port = 8556;
-    TuningConfig tuning;
     CameraConfig cameras[kNumCameras];
 };
 

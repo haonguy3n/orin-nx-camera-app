@@ -2,7 +2,6 @@
 
 #include <json-glib/json-glib.h>
 
-#include "isp_file.h"
 #include "rtsp_server.h"
 #include "v4l2_ctrl.h"
 
@@ -458,15 +457,6 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
             json_builder_add_int_value(
                 b, rtsp != nullptr ? rtsp->client_count() : 0);
         }
-        json_builder_set_member_name(b, "tuning");
-        json_builder_begin_object(b);
-        json_builder_set_member_name(b, "black_level");
-        json_builder_add_int_value(b, cfg.tuning.black_level);
-        json_builder_set_member_name(b, "wb_trim_r");
-        json_builder_add_double_value(b, cfg.tuning.wb_trim_r);
-        json_builder_set_member_name(b, "wb_trim_b");
-        json_builder_add_double_value(b, cfg.tuning.wb_trim_b);
-        json_builder_end_object(b);
         json_builder_set_member_name(b, "cameras");
         json_builder_begin_array(b);
         for (int i = 0; i < Config::kNumCameras; ++i) {
@@ -768,46 +758,6 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
         JsonBuilder* b = json_builder_new();
         add_v4l2_control(b, c);
         return take_root(b);
-    }
-
-    if (m == "set-tuning") {
-        TuningConfig t = cfg.tuning;
-        int64_t bl;
-        double v;
-        if (param_int(params, "black_level", &bl)) {
-            if (bl < 0 || bl > 1023)
-                return invalid("black_level must be 0-1023");
-            t.black_level = static_cast<int>(bl);
-        }
-        if (param_double(params, "wb_trim_r", &v)) {
-            if (v < 0.5 || v > 2.0)
-                return invalid("wb_trim_r must be 0.5-2.0");
-            t.wb_trim_r = v;
-        }
-        if (param_double(params, "wb_trim_b", &v)) {
-            if (v < 0.5 || v > 2.0)
-                return invalid("wb_trim_b must be 0.5-2.0");
-            t.wb_trim_b = v;
-        }
-        if (t == cfg.tuning)
-            return empty_result();  // nothing changed, no outage
-
-        cfg.tuning = t;
-        isp_file_sync(cfg.tuning);
-        // Reply first: applying restarts the Argus daemon and the RTSP
-        // servers (~5 s outage; clients reconnect). Same deferred-idle
-        // pattern as reload — the apply replaces this very server's peers.
-        auto* fn = new std::function<void()>(hooks_.apply_tuning);
-        g_idle_add(
-            [](gpointer data) -> gboolean {
-                auto* f = static_cast<std::function<void()>*>(data);
-                if (*f)
-                    (*f)();
-                delete f;
-                return G_SOURCE_REMOVE;
-            },
-            fn);
-        return empty_result();
     }
 
     if (m == "reload") {

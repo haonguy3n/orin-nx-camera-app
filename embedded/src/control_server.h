@@ -19,7 +19,6 @@ struct ControlHooks {
     std::function<Config&()> config;    // live, mutable configuration
     std::function<RtspServer*()> rtsp;  // current RTSP server
     std::function<void()> reload;       // full config-file reload (= SIGHUP)
-    std::function<void()> apply_tuning; // restart argus + pipelines (set-tuning)
 };
 
 class ControlServer {
