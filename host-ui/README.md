@@ -82,6 +82,14 @@ A per-camera **Zoom** spin box (`set-zoom`, 1–8× GPU center crop + upscale)
 automatically reconnects that video pane on success — zoom applies to new RTSP
 sessions, so the pane restarts to show the new framing.
 
+**Calibrate whites** (Device group; point cam0 at something white/gray first)
+measures the channel imbalance of the near-neutral bright region in cam0's
+decoded video and writes a corrected white trim via `set-tuning`. Applying
+restarts the device's Argus daemon and all streams (~5 s outage), so the UI
+waits, reconnects both panes, lets AE settle, re-measures, and iterates once
+more if needed; progress and the final R/G / B/G residuals appear in the
+Device status line.
+
 ## Milestone 2 roadmap (remaining)
 
 - Per-pane stream stats and reconnect-on-stall handling.

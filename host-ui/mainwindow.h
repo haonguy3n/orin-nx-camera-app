@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonObject>
 #include <QMainWindow>
 #include <QStringList>
 #include <QUrl>
@@ -10,7 +11,7 @@ class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
-class QJsonObject;
+class QImage;
 class QJsonValue;
 class QLabel;
 class QLineEdit;
@@ -76,6 +77,12 @@ private:
     void seedIspControls(CameraControls &controls, const QJsonObject &isp);
     void runDiscovery();
     void showRequestError(const QString &what, const QJsonObject &error);
+    void updateCalibrateEnabled();
+    void startCalibration();
+    void calibrationStep();
+    void finishCalibration(const QString &message);
+    bool measureWhiteBalance(const QImage &image, double *needR,
+                             double *needB, QString *why) const;
 
     QLineEdit *m_hostEdit = nullptr;
     QPushButton *m_connectButton = nullptr;
@@ -94,4 +101,12 @@ private:
     QCheckBox *m_syncCheck = nullptr;
     CameraControls m_cameraControls[2];
     bool m_controlsPopulated = false;
+
+    // White calibration (set-tuning wb trims, PROTOCOL.md).
+    QPushButton *m_calibrateButton = nullptr;
+    QJsonObject m_lastTuning;   // latest "tuning" object from get-status
+    bool m_hasTuning = false;
+    bool m_calibrating = false;
+    int m_calibrationPass = 0;
+    QString m_calibrationResult;
 };

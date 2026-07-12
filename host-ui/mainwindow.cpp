@@ -6,6 +6,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
@@ -17,6 +18,8 @@
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QVideoFrame>
+#include <QVideoSink>
 #include <QVideoWidget>
 
 #include "controlclient.h"
@@ -26,6 +29,14 @@ namespace {
 
 constexpr quint16 kControlPort = 8555;  // PROTOCOL.md default
 constexpr int kStatusPollMs = 2000;
+
+// White calibration: acceptable channel imbalance, and how long to wait
+// out the set-tuning Argus restart (~5 s outage) and post-reconnect AE
+// settling before measuring again.
+constexpr double kWbTolerance = 0.015;
+constexpr int kMaxCalibrationPasses = 2;
+constexpr int kRestartWaitMs = 7000;
+constexpr int kSettleWaitMs = 5000;
 
 } // namespace
 
@@ -74,12 +85,15 @@ MainWindow::MainWindow(QWidget *parent)
         m_controlStatus->setText(QStringLiteral("control: connected"));
         m_errorLabel->clear();
         m_controlsPopulated = false;  // repopulate from the first get-status
+        m_calibrationResult.clear();
         setCameraControlsEnabled(true);
         m_statusTimer->start();
         pollStatus();
     });
 
     connect(m_control, &ControlClient::disconnected, this, [this]() {
+        if (m_calibrating)
+            finishCalibration(QStringLiteral("calibration aborted"));
         m_controlStatus->setText(QStringLiteral("control: disconnected"));
         m_deviceStatus->clear();
         setCameraControlsEnabled(false);
@@ -226,15 +240,23 @@ QWidget *MainWindow::createControlPanel()
     m_syncCheck->setToolTip(QStringLiteral(
         "hardware-synchronized capture: all cameras → external trigger"));
     m_syncCheck->setEnabled(false);
+    m_calibrateButton =
+        new QPushButton(QStringLiteral("Calibrate whites"), statusGroup);
+    m_calibrateButton->setToolTip(
+        QStringLiteral("point cam0 at something white/gray first"));
+    m_calibrateButton->setEnabled(false);
     statusLayout->addWidget(m_controlStatus);
     statusLayout->addWidget(m_deviceStatus);
     statusLayout->addWidget(m_syncCheck);
+    statusLayout->addWidget(m_calibrateButton);
     statusLayout->addWidget(m_errorLabel);
     layout->addWidget(statusGroup);
 
     // clicked (not toggled): user toggles only, never programmatic reverts.
     connect(m_syncCheck, &QCheckBox::clicked, this,
             [this](bool enabled) { applySync(enabled); });
+    connect(m_calibrateButton, &QPushButton::clicked, this,
+            &MainWindow::startCalibration);
 
     layout->addWidget(createCameraGroup(0));
     layout->addWidget(createCameraGroup(1));
@@ -419,6 +441,7 @@ void MainWindow::connectStreams()
     m_control->connectToDevice(controlHost(), kControlPort);
     m_connected = true;
     m_connectButton->setText(QStringLiteral("Disconnect"));
+    updateCalibrateEnabled();
 }
 
 void MainWindow::restartPane(int index)
@@ -445,6 +468,7 @@ void MainWindow::disconnectStreams()
     m_control->disconnectFromDevice();
     m_connected = false;
     m_connectButton->setText(QStringLiteral("Connect"));
+    updateCalibrateEnabled();
 }
 
 void MainWindow::setStatus(Pane &pane, const QString &text)
@@ -486,6 +510,7 @@ void MainWindow::setCameraControlsEnabled(bool enabled)
     for (CameraControls &controls : m_cameraControls)
         controls.group->setEnabled(enabled);
     m_syncCheck->setEnabled(enabled);
+    updateCalibrateEnabled();
 }
 
 void MainWindow::pollStatus()
@@ -497,6 +522,13 @@ void MainWindow::pollStatus()
                 showRequestError(QStringLiteral("get-status"), error);
                 return;
             }
+
+            // Latest device-wide tuning (black level + wb trims) — the
+            // white calibration composes its trims on top of this.
+            const QJsonValue tuning = result.value(QStringLiteral("tuning"));
+            m_hasTuning = tuning.isObject();
+            if (m_hasTuning)
+                m_lastTuning = tuning.toObject();
 
             QStringList lines;
             const QJsonArray cameras =
@@ -571,7 +603,12 @@ void MainWindow::pollStatus()
                 }
             }
             m_controlsPopulated = true;
-            m_deviceStatus->setText(lines.join(QLatin1Char('\n')));
+            if (!m_calibrationResult.isEmpty())
+                lines << m_calibrationResult;
+            // Don't clobber the calibration progress text (the poll timer
+            // is paused then, but an in-flight reply could still land here).
+            if (!m_calibrating)
+                m_deviceStatus->setText(lines.join(QLatin1Char('\n')));
         });
 }
 
@@ -784,4 +821,177 @@ void MainWindow::showRequestError(const QString &what, const QJsonObject &error)
         return; // teardown noise; the control status line already says it
     m_errorLabel->setText(QStringLiteral("%1: %2").arg(
         what, error.value(QStringLiteral("message")).toString()));
+}
+
+void MainWindow::updateCalibrateEnabled()
+{
+    // Needs decoded video (cam0 pane) and the control channel, and only
+    // one calibration at a time.
+    m_calibrateButton->setEnabled(m_control->isConnected() && m_connected
+                                  && !m_calibrating);
+}
+
+void MainWindow::startCalibration()
+{
+    if (m_calibrating)
+        return;
+    m_calibrating = true;
+    m_calibrationPass = 1;
+    m_calibrationResult.clear();
+    m_statusTimer->stop();  // keep the progress text unclobbered
+    updateCalibrateEnabled();
+    calibrationStep();
+}
+
+void MainWindow::calibrationStep()
+{
+    if (!m_calibrating)
+        return;
+    m_deviceStatus->setText(
+        QStringLiteral("calibrating… pass %1/%2")
+            .arg(qMin(m_calibrationPass, kMaxCalibrationPasses))
+            .arg(kMaxCalibrationPasses));
+
+    // Grab the frame cam0 is showing right now.
+    QVideoSink *sink = m_panes[0].video->videoSink();
+    const QVideoFrame frame = sink ? sink->videoFrame() : QVideoFrame();
+    const QImage image = frame.isValid() ? frame.toImage() : QImage();
+    if (image.isNull()) {
+        finishCalibration(QStringLiteral("calibration failed: no video frame"));
+        return;
+    }
+
+    double needR = 1.0;
+    double needB = 1.0;
+    QString why;
+    if (!measureWhiteBalance(image, &needR, &needB, &why)) {
+        finishCalibration(QStringLiteral("calibration failed: %1").arg(why));
+        return;
+    }
+
+    const bool neutral = qAbs(needR - 1.0) <= kWbTolerance
+                         && qAbs(needB - 1.0) <= kWbTolerance;
+    if (neutral || m_calibrationPass > kMaxCalibrationPasses) {
+        // Report the measured residuals (R/G and B/G of the white region).
+        finishCalibration(neutral && m_calibrationPass == 1
+                              ? QStringLiteral("whites already neutral")
+                              : QStringLiteral("calibrated: R/G %1, B/G %2")
+                                    .arg(1.0 / needR, 0, 'f', 2)
+                                    .arg(1.0 / needB, 0, 'f', 2));
+        return;
+    }
+
+    if (!m_hasTuning) {
+        finishCalibration(
+            QStringLiteral("device does not support set-tuning"));
+        return;
+    }
+
+    // Compose the measured correction on top of the current trim.
+    const double newR = qBound(
+        0.5,
+        m_lastTuning.value(QStringLiteral("wb_trim_r")).toDouble(1.0) * needR,
+        2.0);
+    const double newB = qBound(
+        0.5,
+        m_lastTuning.value(QStringLiteral("wb_trim_b")).toDouble(1.0) * needB,
+        2.0);
+
+    QJsonObject params;
+    params.insert(QStringLiteral("wb_trim_r"), newR);
+    params.insert(QStringLiteral("wb_trim_b"), newB);
+    m_control->sendRequest(
+        QStringLiteral("set-tuning"), params,
+        [this, newR, newB](const QJsonObject &, const QJsonObject &error) {
+            if (!m_calibrating)
+                return;
+            if (!error.isEmpty()) {
+                finishCalibration(QStringLiteral("set-tuning: %1").arg(
+                    error.value(QStringLiteral("message")).toString()));
+                return;
+            }
+            // The poll is paused and the device is about to restart, so
+            // remember locally what the next pass must compose on.
+            m_lastTuning.insert(QStringLiteral("wb_trim_r"), newR);
+            m_lastTuning.insert(QStringLiteral("wb_trim_b"), newB);
+            m_deviceStatus->setText(
+                QStringLiteral("calibrating… device restarting (pass %1/%2)")
+                    .arg(m_calibrationPass)
+                    .arg(kMaxCalibrationPasses));
+            // set-tuning restarts the Argus daemon and every stream (~5 s
+            // outage) — wait it out, reconnect both panes, then let the
+            // streams and AE settle before measuring again.
+            QTimer::singleShot(kRestartWaitMs, this, [this]() {
+                if (!m_calibrating)
+                    return;
+                restartPane(0);
+                restartPane(1);
+                QTimer::singleShot(kSettleWaitMs, this, [this]() {
+                    if (!m_calibrating)
+                        return;
+                    ++m_calibrationPass;
+                    calibrationStep();
+                });
+            });
+        });
+}
+
+void MainWindow::finishCalibration(const QString &message)
+{
+    m_calibrating = false;
+    m_calibrationResult = message;
+    m_deviceStatus->setText(message);
+    if (m_control->isConnected()) {
+        m_statusTimer->start();
+        pollStatus();  // repaints the status line, keeping the result line
+    }
+    updateCalibrateEnabled();
+}
+
+bool MainWindow::measureWhiteBalance(const QImage &image, double *needR,
+                                     double *needB, QString *why) const
+{
+    const QImage rgb = image.convertToFormat(QImage::Format_RGB32);
+    if (rgb.isNull()) {
+        *why = QStringLiteral("no video frame");
+        return false;
+    }
+
+    // Mean each channel over near-neutral bright pixels: max(r,g,b) inside
+    // (150, 250) — lit but not clipped — and max-min < 45 (roughly gray).
+    // Every 2nd pixel in both directions is plenty of samples.
+    quint64 sumR = 0;
+    quint64 sumG = 0;
+    quint64 sumB = 0;
+    quint64 count = 0;
+    quint64 sampled = 0;
+    for (int y = 0; y < rgb.height(); y += 2) {
+        const QRgb *row = reinterpret_cast<const QRgb *>(rgb.constScanLine(y));
+        for (int x = 0; x < rgb.width(); x += 2) {
+            ++sampled;
+            const QRgb pixel = row[x];
+            const int r = qRed(pixel);
+            const int g = qGreen(pixel);
+            const int b = qBlue(pixel);
+            const int hi = qMax(r, qMax(g, b));
+            const int lo = qMin(r, qMin(g, b));
+            if (hi <= 150 || hi >= 250 || hi - lo >= 45)
+                continue;
+            sumR += r;
+            sumG += g;
+            sumB += b;
+            ++count;
+        }
+    }
+
+    if (sampled == 0 || count * 100 < sampled) {  // under 1% qualifying
+        *why = QStringLiteral("not enough white/gray in view");
+        return false;
+    }
+
+    // Gains that would pull the region's R and B means onto G. The filter
+    // guarantees lo > 105, so the sums cannot be zero.
+    *needR = static_cast<double>(sumG) / static_cast<double>(sumR);
+    *needB = static_cast<double>(sumG) / static_cast<double>(sumB);
+    return true;
 }
