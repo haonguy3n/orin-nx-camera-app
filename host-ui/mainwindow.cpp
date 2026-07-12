@@ -186,6 +186,14 @@ QWidget *MainWindow::createPane(Pane &pane, const QString &name)
 
     pane.video = new QVideoWidget(container);
     pane.video->setMinimumSize(320, 240);
+    // QVideoWidget sets WA_OpaquePaintEvent internally, so autoFillBackground
+    // alone does nothing — it promises to paint every pixel but paints
+    // nothing when idle, leaving the desktop visible during window drags.
+    // Clear that attribute and force a black stylesheet background (the
+    // convention for idle video surfaces) so the widget is actually opaque.
+    pane.video->setAttribute(Qt::WA_OpaquePaintEvent, false);
+    pane.video->setAutoFillBackground(true);
+    pane.video->setStyleSheet(QStringLiteral("background: #000000;"));
 
     pane.status = new QLabel(container);
     pane.status->setWordWrap(true);

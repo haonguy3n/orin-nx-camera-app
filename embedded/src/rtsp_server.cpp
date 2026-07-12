@@ -152,13 +152,12 @@ GstPadProbeReturn RtspServer::on_payload_buffer(GstPad* /*pad*/,
                                                 GstPadProbeInfo* info,
                                                 gpointer user_data) {
     auto* cam = static_cast<CamState*>(user_data);
-    const guint64 count =
-        cam->frames.fetch_add(1, std::memory_order_relaxed) + 1;
 
-    // The payloader pushes a GstBufferList when a frame spans several RTP
-    // packets — the norm for 1080p H.265 — and a BUFFER-only probe never
-    // sees those (the counter read 0 on target while the stream played).
-    // One push = one frame either way; take metadata from the first packet.
+    // The payloader may push one RTP packet per buffer, or a GstBufferList
+    // per frame — packetization varies by codec and frame size, so neither
+    // "one push" nor "one buffer" is a frame. Count a distinct PTS instead:
+    // every RTP packet of a frame carries that frame's timestamp, so the
+    // PTS changes exactly once per frame.
     GstBuffer* buffer;
     if (GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_BUFFER_LIST) {
         GstBufferList* list = GST_PAD_PROBE_INFO_BUFFER_LIST(info);
@@ -170,6 +169,17 @@ GstPadProbeReturn RtspServer::on_payload_buffer(GstPad* /*pad*/,
     } else {
         buffer = GST_PAD_PROBE_INFO_BUFFER(info);
     }
+
+    const guint64 pts = GST_BUFFER_PTS_IS_VALID(buffer)
+                            ? GST_BUFFER_PTS(buffer)
+                            : GST_CLOCK_TIME_NONE;
+    if (pts != GST_CLOCK_TIME_NONE &&
+        pts == cam->last_pts.load(std::memory_order_relaxed) &&
+        cam->frames.load(std::memory_order_relaxed) > 0)
+        return GST_PAD_PROBE_OK;  // another packet of the frame just counted
+
+    const guint64 count =
+        cam->frames.fetch_add(1, std::memory_order_relaxed) + 1;
     // v4l2src puts the capture sequence in the buffer offset; sources that
     // don't (argus, videotestsrc pipelines after encoding) fall back to the
     // running frame count so `sequence` is always usable.
@@ -282,6 +292,7 @@ gboolean RtspServer::on_watchdog(gpointer user_data) {
         if (media == nullptr) {
             cam.stalled_checks = 0;
             cam.last_frames = frames;
+            cam.fps.store(0, std::memory_order_relaxed);
             continue;
         }
         // Only a PLAYING pipeline is expected to produce frames — prepared
@@ -293,10 +304,23 @@ gboolean RtspServer::on_watchdog(gpointer user_data) {
         g_object_unref(media);
 
         if (state != GST_STATE_PLAYING || frames != cam.last_frames) {
+            cam.fps.store(
+                static_cast<double>(frames - cam.last_frames) / kWatchdogPeriodSec,
+                std::memory_order_relaxed);
+            // A live pipeline delivering far under its configured rate means
+            // the sensor is dropping frames (usually Argus AE trading frame
+            // rate for exposure in dim light — see the ISP file's
+            // autoFramerateRange).
+            const double fps = cam.fps.load(std::memory_order_relaxed);
+            const double want = self->config_.cameras[cam.index].framerate;
+            if (state == GST_STATE_PLAYING && want > 0 && fps < want * 0.8)
+                g_warning("/cam%d: delivering %.1f fps, configured %.0f",
+                          cam.index, fps, want);
             cam.stalled_checks = 0;
             cam.last_frames = frames;
             continue;
         }
+        cam.fps.store(0, std::memory_order_relaxed);
         if (++cam.stalled_checks >= kStallChecks) {
             g_critical("watchdog: /cam%d is live but produced no frame for "
                        "%d s — exiting for a clean restart",
@@ -407,6 +431,7 @@ StreamStatus RtspServer::stream_status(int cam) {
     StreamStatus s;
     s.mounted = cams_[cam].mounted;
     s.frames = cams_[cam].frames.load(std::memory_order_relaxed);
+    s.fps = cams_[cam].fps.load(std::memory_order_relaxed);
     s.sequence = cams_[cam].last_sequence.load(std::memory_order_relaxed);
     s.pts = cams_[cam].last_pts.load(std::memory_order_relaxed);
     s.wallclock = cams_[cam].last_wallclock.load(std::memory_order_relaxed);

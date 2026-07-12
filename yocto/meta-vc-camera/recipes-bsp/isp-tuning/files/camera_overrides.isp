@@ -1,7 +1,20 @@
-# Char-lite Calibration
-# command:     nv_wrapper 0 optical_black_file C:\Users\gbarrett\OneDrive - D3\Documents\MotoVigilant\motoVig\20240429_tuning\output\ob.cfg awb C:\Users\gbarrett\OneDrive - D3\Documents\MotoVigilant\motoVig\20240429_tuning\output\awb_pos0_redux.cfg ccm C:\Users\gbarrett\OneDrive - D3\Documents\MotoVigilant\motoVig\20240429_tuning\output\ccm_pos0.cfg chip orin platform jetson public_params E:\nv_charlite_2.6.0c\executables\public_params_jetson_orin.cfg out_name C:\Users\gbarrett\OneDrive - D3\Documents\MotoVigilant\motoVig\20240429_tuning\output\20240510_pos0_wbRedux_orin_camera_overrides.isp
-# version:     2.6.0c
-# created on: 08-Jul-2024 14:17
+# camera_overrides.isp — VC MIPI IMX296C on Jetson Orin NX (camera-app)
+#
+# Base: D3 Engineering Char-lite calibration (nv_wrapper 2.6.0c, 2024-07):
+# calibrated optical black, AWB gray-line model, dual-illuminant CCM, tone
+# curve, noise-reduction and sharpness tables.
+#
+# Adapted for this camera (see tools/isp-tuning/README.md):
+#   - autoFramerateRange pinned to the IMX296's real limits. The stock file
+#     allowed {7.5, 120}: 120 fps is impossible on this sensor, and in dim
+#     light AE was licensed to drop it to 7.5 fps, starving the 60 fps
+#     pipeline. Now AE trades exposure/gain instead of frame rate.
+#   - autofocus, flash and color-effect (sepia/aqua/...) sections dropped:
+#     fixed-focus lenses, no flash hardware, effects never used. Argus uses
+#     its defaults for anything absent here.
+#   - optical black kept at 60 LSB, which matches our own dark-frame
+#     measurement of this sensor exactly.
+#
 
 #* =============================================================
 #
@@ -29,7 +42,7 @@ ap15Function.lensShading = TRUE;
 ae.MeanAlg.ConvergeSpeed = 0.5;
 ae.MaxFstopDeltaPos = 0.4;
 ae.MaxFstopDeltaNeg = 0.5;
-defaults.autoFramerateRange = {7.5, 120.0};
+defaults.autoFramerateRange = {30.0, 60.0};   # IMX296: 60.379 fps max, never drop below 30
 ae.ApertureStepToFNumberLUT = {2.4};
 ae.ExposureTuningTable.Preview[0] = {2.4, 0.01666, 1.0, 1.0};
 ae.ExposureTuningTable.Preview[1] = {2.4, 0.03333, 1.0, 1.0};
@@ -169,16 +182,6 @@ tc.v2.FlashUseAxisX={ 1068.0000, 2136.0000, 9970.0000, 14242.0000 };
 tc.v2.FlashUseAxisY={ 1.0000, 1.0000, 1.0000, 1.0000 };
 tc.v2.initStats.brightness=3811;
 tc.v2.initStats.tcdre=1.0;
-flash.IntensityCalibrateEnable = false;
-flash.Led1.FlashLevel[1] = 180;
-flash.Led1.TorchLevel[1] = 100;
-af.module_cal_enable = 0;
-af.settle_time = 30;
-af.inf = 220;
-af.macro = 510;
-af.inf_offset = 0;
-af.macro_offset = 0;
-af.macro_max = 100;
 noiseReduction.v2.MaxValue = 7;
 noiseReduction.v2.Preview[0] = { 1, 2, 3, 5, 6, 7, 7 };
 noiseReduction.v2.Preview[1] = { 1, 2, 3, 5, 6, 7, 7 };
@@ -220,32 +223,6 @@ noiseReduction.v8.tab.wdr.Video[2] =   { 0, 0, 0, 0, 0, 0, 0 };
 noiseReduction.v8.tab.wdr.Video[3] =   { 0, 0, 0, 0, 0, 0, 0 };
 
 
-colorEffects.sepia.param1 = -0.1500;
-colorEffects.sepia.param2 = 0.2000;
-colorEffects.aqua.param1 = 0.3000;
-colorEffects.aqua.param2 = -0.3500;
-colorEffects.solarize.numPoints = 4;
-colorEffects.solarize.point[0] = {0, 0};
-colorEffects.solarize.point[1] = {128, 160};
-colorEffects.solarize.point[2] = {196, 160};
-colorEffects.solarize.point[3] = {256, 0};
-colorEffects.solarize.point[4] = {0, 0};
-colorEffects.solarize.point[5] = {0, 0};
-colorEffects.solarize.point[6] = {0, 0};
-colorEffects.solarize.point[7] = {0, 0};
-colorEffects.solarize.point[8] = {0, 0};
-colorEffects.solarize.point[9] = {0, 0};
-colorEffects.posterize.numPoints = 8;
-colorEffects.posterize.point[0] = {0, 0};
-colorEffects.posterize.point[1] = {54, 0};
-colorEffects.posterize.point[2] = {69, 85};
-colorEffects.posterize.point[3] = {123, 85};
-colorEffects.posterize.point[4] = {138, 170};
-colorEffects.posterize.point[5] = {192, 170};
-colorEffects.posterize.point[6] = {207, 256};
-colorEffects.posterize.point[7] = {256, 256};
-colorEffects.posterize.point[8] = {0, 0};
-colorEffects.posterize.point[9] = {0, 0};
 lensShading.module_cal_enable = 0;
 awb.module_cal_enable = 0;
 lensShading.falloff_PointsCount = 6;

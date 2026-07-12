@@ -468,6 +468,8 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
                 json_builder_add_boolean_value(b, s.streaming);
                 json_builder_set_member_name(b, "frames");
                 json_builder_add_int_value(b, s.frames);
+                json_builder_set_member_name(b, "fps");
+                json_builder_add_double_value(b, s.fps);
                 // Live values programmed into the sensor right now — when
                 // exposure/gain are 0 (auto), this is what Argus AE chose.
                 // Read from the driver's V4L2 controls; omitted if the

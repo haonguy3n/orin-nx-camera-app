@@ -14,6 +14,10 @@ struct StreamStatus {
     bool mounted = false;    // camera enabled, factory installed
     bool streaming = false;  // a (shared) media pipeline is currently live
     guint64 frames = 0;      // buffers through the payloader since start()
+    double fps = 0;          // measured over the last watchdog period —
+                             // the rate actually delivered, which is not the
+                             // configured one when Argus AE trades frame rate
+                             // for exposure in dim light
     // Metadata of the newest frame (valid once frames > 0): capture
     // sequence (v4l2 frame sequence when the source provides it), buffer
     // PTS in ns, and the wallclock µs when it passed the payloader.
@@ -74,6 +78,7 @@ private:
         // Watchdog bookkeeping (main loop thread only).
         guint64 last_frames = 0;
         int stalled_checks = 0;
+        std::atomic<double> fps{0};  // frames/s over the last watchdog period
     };
 
     static GstPadProbeReturn on_payload_buffer(GstPad* pad,

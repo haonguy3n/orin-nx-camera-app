@@ -82,6 +82,10 @@ No params. → snapshot of the whole service:
   pipeline per mount).
 - `frames`: buffers through the payloader since the pipeline was created —
   the host can watch this advance as a health signal.
+- `fps`: frames actually delivered over the last 5 s (0 when not streaming).
+  This is the *measured* rate, which can sit below the configured
+  `framerate` if Argus AE trades frame rate for exposure in dim light; the
+  device also logs a warning below 80 % of the configured rate.
 - `exposure_current` (µs) / `gain_current` (VC driver units, milli-dB):
   the values programmed into the sensor *right now*, read from its V4L2
   controls — when the configured `exposure`/`gain` are `0` (auto), these
