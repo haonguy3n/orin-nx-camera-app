@@ -21,7 +21,7 @@ struct CameraConfig {
     // properties; v4l2: mapped to the VC driver's V4L2 controls.
     int exposure = 0;               // µs; 0 = auto (argus) / driver default
     double gain = 0;                // 0 = auto/default; argus: multiplier,
-                                    // v4l2: raw control units (VC: 0.1 dB)
+                                    // v4l2: raw units (VC: milli-dB, 0-48000)
     int trigger = -1;               // VC trigger mode 0..7; -1 = leave as is
 
     // Runtime ISP overrides (argus only): nvarguscamerasrc property ->

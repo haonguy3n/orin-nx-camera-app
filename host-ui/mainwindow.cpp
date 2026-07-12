@@ -261,7 +261,9 @@ QWidget *MainWindow::createCameraGroup(int index)
     form->addRow(QStringLiteral("Exposure:"), controls.exposure);
 
     controls.gain = new QDoubleSpinBox(controls.group);
-    controls.gain->setRange(0.0, 480.0);
+    // argus: analog gain multiplier (1-16); v4l2: VC driver milli-dB
+    // (0-48000 = 0-48 dB, step 100).
+    controls.gain->setRange(0.0, 48000.0);
     controls.gain->setDecimals(1);
     controls.gain->setSpecialValueText(QStringLiteral("auto")); // 0 = auto
     form->addRow(QStringLiteral("Gain:"), controls.gain);

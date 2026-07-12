@@ -117,8 +117,8 @@ No params. → the current in-memory configuration (same camera fields as
 `{"camera": 0|1, "gain": <number, 0 = auto/default>}` → `{}`
 
 - `argus`: locks `gainrange` (analog gain multiplier, typically 1–16).
-- `v4l2`: sets the sensor `gain` V4L2 control (raw driver units, typically
-  0–480 = 0–48 dB for VC IMX296).
+- `v4l2`: sets the sensor `gain` V4L2 control (raw driver units; VC IMX296:
+  milli-dB, 0–48000 = 0–48 dB, step 100).
 
 ### `set-trigger`
 
