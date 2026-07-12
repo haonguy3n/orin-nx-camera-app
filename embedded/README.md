@@ -46,8 +46,7 @@ ships in `config/camera-streamer.conf`. All keys:
 | | `transport` | `tcp` | RTP transport offered: `tcp` (interleaved, firewall-proof), `udp`, or `all` (client picks) |
 | | `control-port` | `8555` | TCP control protocol port, same bind address as RTSP; `0` disables |
 | | `discovery-port` | `8556` | UDP discovery responder (always 0.0.0.0); `0` disables |
-| `[tuning]` | `managed` | `true` | `false` = never touch `camera_overrides.isp` (deployed professional tuning file); disables `set-tuning` |
-| | `black-level` | `60` | sensor optical-black pedestal written into `camera_overrides.isp` (10-bit units) |
+| `[tuning]` | `black-level` | `60` | sensor optical-black pedestal written into `camera_overrides.isp` (10-bit units) |
 | | `wb-trim-r` / `wb-trim-b` | measured | post-AWB white trim (R/B gain vs G) in the same file; runtime-adjustable via `set-tuning` (~5 s Argus restart) |
 | `[cam0]`/`[cam1]` | `enabled` | `true` | serve this camera at `/cam0`/`/cam1` |
 | | `source` | `argus` | `argus` (nvarguscamerasrc/ISP), `v4l2` (v4l2src, best-effort in M1), `test` (videotestsrc + software encoder, no hardware needed) |

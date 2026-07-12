@@ -44,11 +44,6 @@ std::string isp_file_content(const TuningConfig& tuning) {
 }
 
 bool isp_file_sync(const TuningConfig& tuning) {
-    if (!tuning.managed) {
-        g_message("tuning: unmanaged ([tuning] managed=false), leaving %s alone",
-                  isp_file_path());
-        return false;
-    }
     const char* path = isp_file_path();
     const std::string content = isp_file_content(tuning);
 

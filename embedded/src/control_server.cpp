@@ -771,9 +771,6 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
     }
 
     if (m == "set-tuning") {
-        if (!cfg.tuning.managed)
-            return failed("tuning file is unmanaged ([tuning] managed=false); "
-                          "edit camera_overrides.isp directly");
         TuningConfig t = cfg.tuning;
         int64_t bl;
         double v;
