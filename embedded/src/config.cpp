@@ -118,6 +118,13 @@ Config load_config(const std::string& path) {
         cfg.discovery_port = 8556;
     }
 
+    cfg.tuning.black_level = CLAMP(
+        get_int(kf, "tuning", "black-level", cfg.tuning.black_level), 0, 1023);
+    cfg.tuning.wb_trim_r = CLAMP(
+        get_double(kf, "tuning", "wb-trim-r", cfg.tuning.wb_trim_r), 0.5, 2.0);
+    cfg.tuning.wb_trim_b = CLAMP(
+        get_double(kf, "tuning", "wb-trim-b", cfg.tuning.wb_trim_b), 0.5, 2.0);
+
     for (int i = 0; i < Config::kNumCameras; ++i) {
         char group[8];
         g_snprintf(group, sizeof(group), "cam%d", i);

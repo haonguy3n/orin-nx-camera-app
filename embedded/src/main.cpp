@@ -9,9 +9,12 @@
 
 #include <memory>
 
+#include <cstdlib>
+
 #include "config.h"
 #include "control_server.h"
 #include "discovery_server.h"
+#include "isp_file.h"
 #include "rtsp_server.h"
 
 #ifndef DEFAULT_CONF_PATH
@@ -30,6 +33,7 @@ struct App {
 };
 
 static void do_reload(App* app);
+static void apply_tuning(App* app);
 
 // Brings up the RTSP server and (unless control-port=0) the control server
 // on the same address, from app->config.
@@ -51,6 +55,7 @@ static bool start_servers(App* app) {
         hooks.config = [app]() -> Config& { return app->config; };
         hooks.rtsp = [app]() { return app->rtsp.get(); };
         hooks.reload = [app]() { do_reload(app); };
+        hooks.apply_tuning = [app]() { apply_tuning(app); };
         app->control = std::make_unique<ControlServer>(std::move(hooks));
         if (!app->control->start(app->rtsp->bound_address(),
                                  app->config.control_port)) {
@@ -99,6 +104,22 @@ static void do_reload(App* app) {
     }
 }
 
+// Applies changed deep tuning (set-tuning): the overrides file is already
+// written; libargus only re-reads it when nvargus-daemon restarts, and a
+// daemon restart kills every live Argus session — so drop the pipelines
+// around it. ~5 s outage; clients reconnect.
+static void apply_tuning(App* app) {
+    g_message("tuning: restarting nvargus-daemon and pipelines");
+    stop_servers(app);
+    if (system("systemctl restart nvargus-daemon 2>/dev/null") != 0)
+        g_warning("tuning: nvargus-daemon restart failed (not on target?)");
+    if (!start_servers(app)) {
+        g_printerr("tuning: restart failed, exiting\n");
+        app->exit_code = 1;
+        g_main_loop_quit(app->loop);  // systemd restarts us
+    }
+}
+
 static gboolean on_signal(gpointer user_data) {
     auto* app = static_cast<App*>(user_data);
     g_message("shutdown signal received");
@@ -117,6 +138,10 @@ int main(int argc, char* argv[]) {
     App app;
     app.conf_path = argc > 1 ? argv[1] : DEFAULT_CONF_PATH;
     app.config = load_config(app.conf_path);
+
+    // Bring the overrides file in line with [tuning] before any Argus
+    // session exists (the daemon caches it at first use).
+    isp_file_sync(app.config.tuning);
 
     if (!start_servers(&app))
         return 1;  // systemd Restart=on-failure retries (e.g. DHCP not up yet)

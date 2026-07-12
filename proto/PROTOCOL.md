@@ -178,6 +178,25 @@ Note: `set-isp` adjusts Argus's runtime processing. The static tuning
 (lens shading, CCM, gamma) lives in `camera_overrides.isp` on the device —
 see `yocto/meta-vc-camera/recipes-bsp/isp-tuning/`.
 
+### `set-tuning`
+
+`{"black_level": 0–1023, "wb_trim_r": 0.5–2.0, "wb_trim_b": 0.5–2.0}` → `{}`
+
+Deep ISP tuning — the parameters that live in libargus's
+`camera_overrides.isp` (device-wide, not per camera): the sensor's
+optical-black pedestal, and the post-AWB white trim (diagonal color-matrix
+gains for R and B relative to G). All members optional; omitted ones keep
+their value. Unlike the instant `set-isp` knobs, applying regenerates the
+overrides file and **restarts the Argus daemon and every stream** — a
+~5 s outage after the reply; clients reconnect. If nothing changed, no
+outage. Current values appear as the `tuning` object in
+`get-status`/`get-config`, and can be preset from the config file
+(`[tuning] black-level / wb-trim-r / wb-trim-b`).
+
+The host UI's "Calibrate whites" uses this: it measures the white-region
+channel imbalance in the decoded video, composes it with the current trim,
+applies, and iterates once (AWB partially adapts around the first pass).
+
 ### `set-zoom`
 
 `{"camera": 0|1, "factor": <1.0–8.0>, "x": <0–1>, "y": <0–1>}` → `{}`

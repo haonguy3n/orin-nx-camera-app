@@ -21,6 +21,7 @@ add_executable(camera-streamer
     src/config.cpp
     src/control_server.cpp
     src/discovery_server.cpp
+    src/isp_file.cpp
     src/net_util.cpp
     src/rtsp_server.cpp
     src/v4l2_ctrl.cpp
