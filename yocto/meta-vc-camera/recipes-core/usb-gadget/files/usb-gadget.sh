@@ -79,6 +79,15 @@ start() {
     fi
     echo "$udc" > UDC
 
+    # --- force the OTG port into device role. On the p3768 devkit the
+    # USB-C port's role switch comes up as "none", so the bound gadget
+    # never attaches to the host (usb0 stays NO-CARRIER, nothing enumerates
+    # on the PC). Stock L4T's nv-l4t-usb-device-mode forces this too.
+    for role in /sys/class/usb_role/*/role; do
+        [ -e "$role" ] || continue
+        echo device > "$role" 2>/dev/null || true
+    done
+
     # --- device-side network config; the netdev exists once ncm.usb0 does.
     iface=$(cat functions/ncm.usb0/ifname)
     ip link set "$iface" up

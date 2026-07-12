@@ -197,8 +197,10 @@
                                 // ----------------------------------------------------
                                 // If you want to use GStreamer with nvarguscamerasrc
                                 // you have to adjust this settings
-                                physical_w              = "1.000";
-                                physical_h              = "1.000";
+                                // IMX296 sensor physical dimensions (VC README:
+                                // required for nvarguscamerasrc/libargus).
+                                physical_w              = "4.968";
+                                physical_h              = "3.726";
                                 // ----------------------------------------------------
 
                                 // This node is needed by the Tegra framework.
@@ -214,10 +216,13 @@
                                         // ----------------------------------------------------
                                         // If you want to use GStreamer with nvarguscamerasrc
                                         // you have to adjust this settings. 
+                                        // IMX296 active area 1440x1080: Argus fails
+                                        // sensor open() (SCF BadParameter cascade in
+                                        // nvargus-daemon) with the template's 0x0.
                                         active_l                 = "0";
                                         active_t                 = "0";
-                                        active_w                 = "0";
-                                        active_h                 = "0";
+                                        active_w                 = "1440";
+                                        active_h                 = "1080";
                                         mode_type                = "bayer";
                                         pixel_phase              = "rggb";
                                         csi_pixel_bit_depth      = "10";
@@ -294,8 +299,10 @@
                                 // ----------------------------------------------------
                                 // If you want to use GStreamer with nvarguscamerasrc
                                 // you have to adjust this settings
-                                physical_w              = "1.000";
-                                physical_h              = "1.000";
+                                // IMX296 sensor physical dimensions (VC README:
+                                // required for nvarguscamerasrc/libargus).
+                                physical_w              = "4.968";
+                                physical_h              = "3.726";
                                 // ----------------------------------------------------
 
                                 // This node is needed by the Tegra framework.
@@ -311,10 +318,13 @@
                                         // ----------------------------------------------------
                                         // If you want to use GStreamer with nvarguscamerasrc
                                         // you have to adjust this settings. 
+                                        // IMX296 active area 1440x1080: Argus fails
+                                        // sensor open() (SCF BadParameter cascade in
+                                        // nvargus-daemon) with the template's 0x0.
                                         active_l                 = "0";
                                         active_t                 = "0";
-                                        active_w                 = "0";
-                                        active_h                 = "0";
+                                        active_w                 = "1440";
+                                        active_h                 = "1080";
                                         mode_type                = "bayer";
                                         pixel_phase              = "rggb";
                                         csi_pixel_bit_depth      = "10";
