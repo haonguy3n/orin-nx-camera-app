@@ -6,23 +6,25 @@
 #include <QUrl>
 
 class ControlClient;
+class ControlPanel;
 class DiscoveryClient;
-class QCheckBox;
 class QComboBox;
-class QDoubleSpinBox;
-class QGroupBox;
-class QImage;
-class QJsonValue;
-class QLabel;
 class QLineEdit;
-class QMediaPlayer;
-class QMenu;
 class QPushButton;
-class QSpinBox;
-class QTimer;
+class QMenu;
 class QStackedWidget;
-class QVideoWidget;
+class QTimer;
+class VideoPane;
+class WhiteBalanceCalibrator;
 
+// Thin orchestrator: wires the top toolbar, video pane stack, and control
+// panel sidebar together, and routes user actions to the control channel.
+// All UI construction and domain logic is delegated to dedicated classes:
+//   - Theme:           stylesheet + font
+//   - VideoPane:       per-camera video surface + player
+//   - ControlPanel:    sidebar (Device + camera sections)
+//   - CameraControls:  per-camera control widgets (inside ControlPanel)
+//   - WhiteBalanceCalibrator: calibration measurement + set-tuning loop
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -31,94 +33,44 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
 
 private:
-    struct Pane {
-        QString name;
-        QMediaPlayer *player = nullptr;
-        QVideoWidget *video = nullptr;
-        QLabel *status = nullptr;
-        // Qt 6's QVideoWidget renders through a GPU surface holding
-        // uninitialized memory until the first frame lands, so an idle one
-        // shows desktop garbage whatever its palette says. Keep it in a
-        // stack behind a plain black page, raised only while frames flow.
-        QStackedWidget *stack = nullptr;
-        QWidget *placeholder = nullptr;
-    };
-
-    // Raise the video surface (live) or the black placeholder (idle).
-    void showVideo(Pane &pane, bool live);
-
-    struct CameraControls {
-        QGroupBox *group = nullptr;
-        QSpinBox *exposure = nullptr;
-        QDoubleSpinBox *gain = nullptr;
-        QComboBox *trigger = nullptr;
-        QPushButton *fire = nullptr;
-        QDoubleSpinBox *zoom = nullptr;
-        // ISP overrides (argus source only, PROTOCOL.md set-isp).
-        QComboBox *wbMode = nullptr;
-        QDoubleSpinBox *saturation = nullptr;
-        QComboBox *tnrMode = nullptr;
-        QDoubleSpinBox *tnrStrength = nullptr;
-        QComboBox *eeMode = nullptr;
-        QDoubleSpinBox *eeStrength = nullptr;
-        QDoubleSpinBox *exposureComp = nullptr;
-    };
-
-    QWidget *createPane(Pane &pane, const QString &name);
-    QWidget *createControlPanel();
-    QWidget *createCameraGroup(int index);
+    void setupToolbar(QWidget *parent);
+    void setupVideoArea(QWidget *parent);
+    void setupConnections();
     void connectStreams();
     void disconnectStreams();
     void restartPane(int index);
-    void setStatus(Pane &pane, const QString &text);
     QUrl streamUrl(int index) const;
     QString controlHost() const;
-    void setCameraControlsEnabled(bool enabled);
     void pollStatus();
-    void applyExposure(int camera);
-    void applyGain(int camera);
-    void applyTrigger(int camera, int item);
-    void applySync(bool enabled);
-    void fireTrigger(int camera);
-    void applyZoom(int camera);
-    void applyIsp(int camera, const QString &param, const QJsonValue &value);
-    void applyIspCombo(int camera, const QString &param, int item);
-    void applyIspSpin(int camera, const QString &param, QDoubleSpinBox *box);
-    void seedIspControls(CameraControls &controls, const QJsonObject &isp);
     void runDiscovery();
     void showRequestError(const QString &what, const QJsonObject &error);
     void updateCalibrateEnabled();
-    void startCalibration();
-    void calibrationStep();
-    void finishCalibration(const QString &message);
-    bool measureWhiteBalance(const QImage &image, double *needR,
-                             double *needB, QString *why) const;
 
+    // Toolbar widgets.
     QLineEdit *m_hostEdit = nullptr;
     QPushButton *m_connectButton = nullptr;
     QPushButton *m_discoverButton = nullptr;
     QMenu *m_discoverMenu = nullptr;
     QComboBox *m_cameraSelect = nullptr;
-    QStackedWidget *m_paneStack = nullptr;
-    Pane m_panes[2];
-    bool m_connected = false;
 
+    // Video area.
+    QStackedWidget *m_paneStack = nullptr;
+    VideoPane *m_panes[2] = {nullptr, nullptr};
+
+    // Control panel sidebar.
+    ControlPanel *m_controlPanel = nullptr;
+
+    // Networking.
     ControlClient *m_control = nullptr;
     DiscoveryClient *m_discovery = nullptr;
     QStringList m_discoveredHosts;
     QTimer *m_statusTimer = nullptr;
-    QLabel *m_controlStatus = nullptr;
-    QLabel *m_deviceStatus = nullptr;
-    QLabel *m_errorLabel = nullptr;
-    QCheckBox *m_syncCheck = nullptr;
-    CameraControls m_cameraControls[2];
-    bool m_controlsPopulated = false;
 
-    // White calibration (set-tuning wb trims, PROTOCOL.md).
-    QPushButton *m_calibrateButton = nullptr;
-    QJsonObject m_lastTuning;   // latest "tuning" object from get-status
-    bool m_hasTuning = false;
-    bool m_calibrating = false;
-    int m_calibrationPass = 0;
+    // Calibration.
+    WhiteBalanceCalibrator *m_calibrator = nullptr;
     QString m_calibrationResult;
+
+    // State.
+    bool m_connected = false;
+    bool m_controlsPopulated = false;
 };

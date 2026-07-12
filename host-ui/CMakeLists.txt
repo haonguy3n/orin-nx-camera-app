@@ -11,10 +11,22 @@ qt_add_executable(camera-viewer
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    cameracontrols.cpp
+    cameracontrols.h
+    collapsiblesection.cpp
+    collapsiblesection.h
     controlclient.cpp
     controlclient.h
+    controlpanel.cpp
+    controlpanel.h
     discoveryclient.cpp
     discoveryclient.h
+    theme.cpp
+    theme.h
+    videopane.cpp
+    videopane.h
+    whitebalancecalibrator.cpp
+    whitebalancecalibrator.h
 )
 
 target_link_libraries(camera-viewer PRIVATE
