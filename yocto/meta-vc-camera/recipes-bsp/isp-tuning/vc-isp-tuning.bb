@@ -9,12 +9,22 @@ LICENSE = "CLOSED"
 
 inherit allarch
 
-SRC_URI = "file://camera_overrides.isp"
+# The tuning file is deliberately not in the layer (get it from VC or
+# calibrate it with tools/isp-tuning/ in the source repo). A plain
+# file:// SRC_URI would break PARSING of the whole layer while the file
+# is absent (bitbake checksums file:// entries at parse time), so
+# reference it only once it exists; until then, building this recipe
+# fails in do_install with a pointer to the README.
+VC_ISP_DIR := "${THISDIR}/files"
+SRC_URI = "${@'file://camera_overrides.isp' if os.path.exists(d.getVar('VC_ISP_DIR') + '/camera_overrides.isp') else ''}"
 
 # libargus reads override tuning from this fixed path at camera open.
 ISP_SETTINGS_DIR = "/var/nvidia/nvcam/settings"
 
 do_install() {
+    if [ ! -e "${WORKDIR}/camera_overrides.isp" ]; then
+        bbfatal "camera_overrides.isp is missing: drop the tuning file into ${VC_ISP_DIR}/ (see the README next to this recipe) before adding vc-isp-tuning to the image"
+    fi
     install -d ${D}${ISP_SETTINGS_DIR}
     # 0664 is what nvidia's own tooling expects; wrong permissions make
     # Argus silently ignore the file.

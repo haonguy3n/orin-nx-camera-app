@@ -30,8 +30,9 @@ Jetson ISP tuning has three layers; this recipe covers the middle one.
    IMAGE_INSTALL += "vc-isp-tuning"
    ```
 
-Without the file present, building `vc-isp-tuning` fails at do_fetch —
-that's why it is not in the image by default.
+Without the file present the recipe still parses (so the layer never
+blocks a build), but building `vc-isp-tuning` fails in do_install with a
+pointer here — that's why it is not in the image by default.
 
 ## Verifying on target
 
