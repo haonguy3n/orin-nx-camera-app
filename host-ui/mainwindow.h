@@ -98,6 +98,8 @@ private:
     QPushButton *m_connectButton = nullptr;
     QPushButton *m_discoverButton = nullptr;
     QMenu *m_discoverMenu = nullptr;
+    QComboBox *m_cameraSelect = nullptr;
+    QStackedWidget *m_paneStack = nullptr;
     Pane m_panes[2];
     bool m_connected = false;
 

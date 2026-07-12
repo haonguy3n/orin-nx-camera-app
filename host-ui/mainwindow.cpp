@@ -59,13 +59,18 @@ MainWindow::MainWindow(QWidget *parent)
     rootLayout->setSpacing(8);
     rootLayout->setContentsMargins(10, 10, 10, 10);
 
-    // Top bar: host/URL entry + connect/disconnect toggle + discovery.
+    // Top bar: host/URL entry + camera selector + connect/disconnect + discovery.
     auto *topBar = new QHBoxLayout;
     topBar->setSpacing(8);
     auto *hostLabel = new QLabel(QStringLiteral("Device:"), central);
     m_hostEdit = new QLineEdit(QStringLiteral("192.168.55.1"), central);
     m_hostEdit->setToolTip(
         QStringLiteral("Device IP/hostname, or an rtsp://host:port base URL"));
+    m_cameraSelect = new QComboBox(central);
+    m_cameraSelect->addItem(QStringLiteral("cam0"));
+    m_cameraSelect->addItem(QStringLiteral("cam1"));
+    m_cameraSelect->setToolTip(
+        QStringLiteral("switch the video pane between cameras"));
     m_connectButton = new QPushButton(QStringLiteral("Connect"), central);
     m_discoverButton = new QPushButton(QStringLiteral("Discover"), central);
     m_discoverButton->setToolTip(
@@ -73,20 +78,31 @@ MainWindow::MainWindow(QWidget *parent)
     m_discoverMenu = new QMenu(m_discoverButton);
     topBar->addWidget(hostLabel);
     topBar->addWidget(m_hostEdit, 1);
+    topBar->addWidget(m_cameraSelect);
     topBar->addWidget(m_connectButton);
     topBar->addWidget(m_discoverButton);
     rootLayout->addLayout(topBar);
 
-    // Two video panes side by side, control panel on the right.
+    // Single video pane with a stack to switch cameras, control panel on the
+    // right. Both players run in the background so switching is instant and
+    // per-camera controls/status remain live for both cameras.
+    m_paneStack = new QStackedWidget(central);
+    m_paneStack->addWidget(createPane(m_panes[0], QStringLiteral("cam0")));
+    m_paneStack->addWidget(createPane(m_panes[1], QStringLiteral("cam1")));
+    m_paneStack->setCurrentIndex(0);
+
     auto *paneLayout = new QHBoxLayout;
     paneLayout->setSpacing(8);
-    paneLayout->addWidget(createPane(m_panes[0], QStringLiteral("cam0")), 1);
-    paneLayout->addWidget(createPane(m_panes[1], QStringLiteral("cam1")), 1);
+    paneLayout->addWidget(m_paneStack, 1);
     paneLayout->addWidget(createControlPanel());
     rootLayout->addLayout(paneLayout, 1);
 
     setCentralWidget(central);
-    resize(1640, 620);
+    resize(1280, 620);
+
+    connect(m_cameraSelect, &QComboBox::activated, this, [this](int index) {
+        m_paneStack->setCurrentIndex(index);
+    });
 
     // Control channel (JSON over TCP, ../proto/PROTOCOL.md) + status poll.
     m_control = new ControlClient(this);
