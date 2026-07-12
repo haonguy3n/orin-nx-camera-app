@@ -297,6 +297,11 @@ channel (exposure/gain/trigger, status, reload), pipeline stall watchdog.
 
 **M3 — productization**: hardware-triggered sync capture, frame metadata (timestamp,
 sequence), device discovery, OTA (RAUC/Mender on meta-tegra), factory flash flow.
+*Bring-up finding for sync capture*: the pure-V4L2 path needs a DT change first —
+the VC template declares every mode `bayer/rggb`, so the mono IMX296 only exposes
+RG10 (no GREY/Y10), which `v4l2src` cannot consume; both cameras currently stream
+via Argus (mono debayers to a gray image, minor artifacts). For triggered capture,
+switch cam1's DT mode to gray (`pixel_t`/Y10) and revisit the capture element.
 *Software side implemented*: `set-sync`/`fire-trigger` orchestration and per-frame
 `last_frame` metadata in the control protocol, UDP discovery (port 8556) with a
 Discover button in the host UI. *Still open*: on-target verification with real

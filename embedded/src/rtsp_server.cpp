@@ -126,7 +126,21 @@ GstPadProbeReturn RtspServer::on_payload_buffer(GstPad* /*pad*/,
     const guint64 count =
         cam->frames.fetch_add(1, std::memory_order_relaxed) + 1;
 
-    GstBuffer* buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+    // The payloader pushes a GstBufferList when a frame spans several RTP
+    // packets — the norm for 1080p H.265 — and a BUFFER-only probe never
+    // sees those (the counter read 0 on target while the stream played).
+    // One push = one frame either way; take metadata from the first packet.
+    GstBuffer* buffer;
+    if (GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_BUFFER_LIST) {
+        GstBufferList* list = GST_PAD_PROBE_INFO_BUFFER_LIST(info);
+        buffer = gst_buffer_list_length(list) > 0
+                     ? gst_buffer_list_get(list, 0)
+                     : nullptr;
+        if (buffer == nullptr)
+            return GST_PAD_PROBE_OK;
+    } else {
+        buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+    }
     // v4l2src puts the capture sequence in the buffer offset; sources that
     // don't (argus, videotestsrc pipelines after encoding) fall back to the
     // running frame count so `sequence` is always usable.
@@ -199,8 +213,11 @@ void RtspServer::on_media_configure(GstRTSPMediaFactory* /*factory*/,
     if (pay != nullptr) {
         GstPad* pad = gst_element_get_static_pad(pay, "src");
         if (pad != nullptr) {
-            gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
-                              on_payload_buffer, cam, nullptr);
+            gst_pad_add_probe(
+                pad,
+                static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_BUFFER |
+                                             GST_PAD_PROBE_TYPE_BUFFER_LIST),
+                on_payload_buffer, cam, nullptr);
             gst_object_unref(pad);
         }
         gst_object_unref(pay);
