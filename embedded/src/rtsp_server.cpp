@@ -99,14 +99,28 @@ const char* client_ip(GstRTSPClient* client) {
     return ip ? ip : "unknown";
 }
 
-GstPadProbeReturn on_payload_buffer(GstPad* /*pad*/, GstPadProbeInfo* /*info*/,
-                                    gpointer user_data) {
-    auto* frames = static_cast<std::atomic<guint64>*>(user_data);
-    frames->fetch_add(1, std::memory_order_relaxed);
+}  // namespace
+
+GstPadProbeReturn RtspServer::on_payload_buffer(GstPad* /*pad*/,
+                                                GstPadProbeInfo* info,
+                                                gpointer user_data) {
+    auto* cam = static_cast<CamState*>(user_data);
+    const guint64 count =
+        cam->frames.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    GstBuffer* buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+    // v4l2src puts the capture sequence in the buffer offset; sources that
+    // don't (argus, videotestsrc pipelines after encoding) fall back to the
+    // running frame count so `sequence` is always usable.
+    guint64 sequence = GST_BUFFER_OFFSET(buffer);
+    if (sequence == GST_BUFFER_OFFSET_NONE)
+        sequence = count - 1;
+    cam->last_sequence.store(sequence, std::memory_order_relaxed);
+    if (GST_BUFFER_PTS_IS_VALID(buffer))
+        cam->last_pts.store(GST_BUFFER_PTS(buffer), std::memory_order_relaxed);
+    cam->last_wallclock.store(g_get_real_time(), std::memory_order_relaxed);
     return GST_PAD_PROBE_OK;
 }
-
-}  // namespace
 
 RtspServer::RtspServer(const Config& config) : config_(config) {
     for (int i = 0; i < Config::kNumCameras; ++i) {
@@ -166,7 +180,7 @@ void RtspServer::on_media_configure(GstRTSPMediaFactory* /*factory*/,
         GstPad* pad = gst_element_get_static_pad(pay, "src");
         if (pad != nullptr) {
             gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
-                              on_payload_buffer, &cam->frames, nullptr);
+                              on_payload_buffer, cam, nullptr);
             gst_object_unref(pad);
         }
         gst_object_unref(pay);
@@ -308,6 +322,9 @@ StreamStatus RtspServer::stream_status(int cam) {
     StreamStatus s;
     s.mounted = cams_[cam].mounted;
     s.frames = cams_[cam].frames.load(std::memory_order_relaxed);
+    s.sequence = cams_[cam].last_sequence.load(std::memory_order_relaxed);
+    s.pts = cams_[cam].last_pts.load(std::memory_order_relaxed);
+    s.wallclock = cams_[cam].last_wallclock.load(std::memory_order_relaxed);
     if (auto* media = g_weak_ref_get(&cams_[cam].media)) {
         s.streaming = true;
         g_object_unref(media);

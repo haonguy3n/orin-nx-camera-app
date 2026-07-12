@@ -297,6 +297,10 @@ channel (exposure/gain/trigger, status, reload), pipeline stall watchdog.
 
 **M3 — productization**: hardware-triggered sync capture, frame metadata (timestamp,
 sequence), device discovery, OTA (RAUC/Mender on meta-tegra), factory flash flow.
+*Software side implemented*: `set-sync`/`fire-trigger` orchestration and per-frame
+`last_frame` metadata in the control protocol, UDP discovery (port 8556) with a
+Discover button in the host UI. *Still open*: on-target verification with real
+trigger wiring, OTA, factory flash flow.
 
 ---
 

@@ -7,7 +7,7 @@ HOMEPAGE = "https://github.com/haonguy3n/camera-app"
 # source tree carries a LICENSE file.
 LICENSE = "CLOSED"
 
-PV = "0.2"
+PV = "0.3"
 
 inherit cmake pkgconfig systemd externalsrc
 

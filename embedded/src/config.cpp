@@ -106,6 +106,13 @@ Config load_config(const std::string& path) {
                   cfg.control_port);
         cfg.control_port = 8555;
     }
+    cfg.discovery_port =
+        get_int(kf, "server", "discovery-port", cfg.discovery_port);
+    if (cfg.discovery_port < 0 || cfg.discovery_port > 65535) {
+        g_warning("config: [server] discovery-port %d out of range (using 8556)",
+                  cfg.discovery_port);
+        cfg.discovery_port = 8556;
+    }
 
     for (int i = 0; i < Config::kNumCameras; ++i) {
         char group[8];

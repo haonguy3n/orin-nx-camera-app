@@ -10,6 +10,7 @@
 
 #include "config.h"
 #include "control_server.h"
+#include "discovery_server.h"
 #include "rtsp_server.h"
 
 #ifndef DEFAULT_CONF_PATH
@@ -22,6 +23,7 @@ struct App {
     Config config;
     std::unique_ptr<RtspServer> rtsp;
     std::unique_ptr<ControlServer> control;
+    std::unique_ptr<DiscoveryServer> discovery;
     GMainLoop* loop = nullptr;
     int exit_code = 0;
 };
@@ -54,10 +56,19 @@ static bool start_servers(App* app) {
             return false;
         }
     }
+
+    if (app->config.discovery_port > 0) {
+        app->discovery = std::make_unique<DiscoveryServer>(app->config);
+        // Discovery is a convenience; a bind failure (port taken) is not
+        // worth refusing to stream over.
+        if (!app->discovery->start())
+            app->discovery.reset();
+    }
     return true;
 }
 
 static void stop_servers(App* app) {
+    app->discovery.reset();
     app->control.reset();  // before rtsp: its hooks reach into the App
     app->rtsp.reset();
 }

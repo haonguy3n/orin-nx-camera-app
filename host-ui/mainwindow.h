@@ -1,9 +1,12 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QStringList>
 #include <QUrl>
 
 class ControlClient;
+class DiscoveryClient;
+class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
@@ -11,6 +14,7 @@ class QJsonObject;
 class QLabel;
 class QLineEdit;
 class QMediaPlayer;
+class QMenu;
 class QPushButton;
 class QSpinBox;
 class QTimer;
@@ -36,6 +40,7 @@ private:
         QSpinBox *exposure = nullptr;
         QDoubleSpinBox *gain = nullptr;
         QComboBox *trigger = nullptr;
+        QPushButton *fire = nullptr;
     };
 
     QWidget *createPane(Pane &pane, const QString &name);
@@ -51,18 +56,26 @@ private:
     void applyExposure(int camera);
     void applyGain(int camera);
     void applyTrigger(int camera, int item);
+    void applySync(bool enabled);
+    void fireTrigger(int camera);
+    void runDiscovery();
     void showRequestError(const QString &what, const QJsonObject &error);
 
     QLineEdit *m_hostEdit = nullptr;
     QPushButton *m_connectButton = nullptr;
+    QPushButton *m_discoverButton = nullptr;
+    QMenu *m_discoverMenu = nullptr;
     Pane m_panes[2];
     bool m_connected = false;
 
     ControlClient *m_control = nullptr;
+    DiscoveryClient *m_discovery = nullptr;
+    QStringList m_discoveredHosts;
     QTimer *m_statusTimer = nullptr;
     QLabel *m_controlStatus = nullptr;
     QLabel *m_deviceStatus = nullptr;
     QLabel *m_errorLabel = nullptr;
+    QCheckBox *m_syncCheck = nullptr;
     CameraControls m_cameraControls[2];
     bool m_controlsPopulated = false;
 };

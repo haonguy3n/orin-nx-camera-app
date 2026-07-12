@@ -44,6 +44,7 @@ ships in `config/camera-streamer.conf`. All keys:
 | `[server]` | `port` | `8554` | RTSP listen port |
 | | `listen` | `all` | network to serve on: `all` (USB + ethernet at once), `usb` (usb0 only), `ethernet` (eth0 only), or an explicit IPv4 address / interface name |
 | | `control-port` | `8555` | TCP control protocol port, same bind address as RTSP; `0` disables |
+| | `discovery-port` | `8556` | UDP discovery responder (always 0.0.0.0); `0` disables |
 | `[cam0]`/`[cam1]` | `enabled` | `true` | serve this camera at `/cam0`/`/cam1` |
 | | `source` | `argus` | `argus` (nvarguscamerasrc/ISP), `v4l2` (v4l2src, best-effort in M1), `test` (videotestsrc + software encoder, no hardware needed) |
 | | `sensor-id` | `0` / `1` | argus only: nvarguscamerasrc sensor-id |
@@ -63,10 +64,14 @@ useful for reproducing issues with plain `gst-launch-1.0`.
 ## Control protocol (M2)
 
 `../proto/PROTOCOL.md` defines the newline-delimited JSON protocol on port
-8555: `get-status` (per-camera streaming state and frame counters),
-`set-exposure` / `set-gain` / `set-trigger`, generic
+8555: `get-status` (per-camera streaming state, frame counters and
+`last_frame` capture metadata for cross-camera sync checks),
+`set-exposure` / `set-gain` / `set-trigger`, `set-sync` (all cameras to
+external trigger) / `fire-trigger` (software single trigger), generic
 `list-controls`/`get-control`/`set-control` for everything else the VC
-driver exposes, and `reload`. It is plain enough to drive by hand:
+driver exposes, and `reload`. A UDP responder on port 8556 answers
+`{"method":"discover"}` broadcasts so the host UI can find devices. The TCP
+side is plain enough to drive by hand:
 
 ```sh
 printf '{"id":1,"method":"set-exposure","params":{"camera":0,"us":5000}}\n' \
@@ -152,6 +157,7 @@ src/main.cpp               App struct (config + servers + main loop), signals
 src/config.{h,cpp}         Config structs + GKeyFile INI loader
 src/rtsp_server.{h,cpp}    GstRTSPServer wrapper, launch strings, watchdog
 src/control_server.{h,cpp} TCP control protocol (proto/PROTOCOL.md)
+src/discovery_server.{h,cpp} UDP discovery responder
 src/v4l2_ctrl.{h,cpp}      V4L2 control get/set for the VC driver
 src/net_util.{h,cpp}       listen= -> bind-address resolution
 config/                    default + videotestsrc test configs

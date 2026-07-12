@@ -181,6 +181,19 @@ bool v4l2_set_trigger_mode(const std::string& device, int mode,
     return v4l2_set_control(device, std::to_string(found->id), mode, error);
 }
 
+bool v4l2_fire_single_trigger(const std::string& device, std::string* error) {
+    std::vector<V4l2Control> ctrls = v4l2_list_controls(device, error);
+    for (const V4l2Control& c : ctrls) {
+        const std::string name = normalize(c.name);
+        if (name.find("single") != std::string::npos &&
+            name.find("trigger") != std::string::npos)
+            return v4l2_set_control(device, std::to_string(c.id), 1, error);
+    }
+    if (error)
+        *error = device + ": no single-trigger control (not a VC MIPI sensor?)";
+    return false;
+}
+
 bool v4l2_set_control(const std::string& device, const std::string& control,
                       int64_t value, std::string* error) {
     int fd = open_device(device, error);

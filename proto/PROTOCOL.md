@@ -82,6 +82,19 @@ No params. → snapshot of the whole service:
   pipeline per mount).
 - `frames`: buffers through the payloader since the pipeline was created —
   the host can watch this advance as a health signal.
+- While frames are flowing, each camera also carries a `last_frame` object —
+  frame metadata sampled at the payloader (M3):
+
+  ```json
+  "last_frame": {"sequence": 5321, "pts": 88683333333, "wallclock": 1783934502123456}
+  ```
+
+  `sequence` is the capture sequence number (GstBuffer offset — the v4l2
+  frame sequence on the v4l2 path, frame count otherwise), `pts` the buffer
+  timestamp in ns (pipeline running-time base), `wallclock` the µs-since-epoch
+  system time when the buffer passed the payloader. Comparing `sequence` and
+  `wallclock` across /cam0 and /cam1 is the check that hardware-triggered
+  capture is actually synchronized.
 
 ### `get-config`
 
@@ -128,6 +141,24 @@ timing and does not support external trigger):
 The exact set depends on the driver; out-of-range values return the V4L2
 error. `-1` in config/`get-status` means "never set, driver default".
 
+### `set-sync`
+
+`{"enabled": true|false}` → `{}`
+
+Hardware-synchronized dual capture (M3): puts **every enabled camera** into
+external trigger mode (`true`, mode 1 — one trigger pulse fanned out to both
+sensors exposes them simultaneously) or back to free running (`false`,
+mode 0). Errors with code `1` if any enabled camera is not on the `v4l2`
+source; nothing is changed in that case.
+
+### `fire-trigger`
+
+`{"camera": 0|1}` → `{}`
+
+Presses the VC driver's software "single trigger" button control — exposes
+one frame when the sensor is in a software-triggerable mode (set
+`set-trigger` mode 4 "single" first). `v4l2` source only.
+
 ### `list-controls`
 
 `{"camera": 0|1}` → every V4L2 control the sensor driver exposes
@@ -162,6 +193,30 @@ the RTSP (and, if its settings changed, control) server, exactly like
 `systemctl reload` / SIGHUP. The response is sent **before** the restart;
 the control connection may drop if `listen`/`control-port` changed.
 Connected RTSP clients are dropped on purpose.
+
+## Discovery (UDP, port 8556)
+
+So the host UI can find devices instead of assuming 192.168.55.1 (M3).
+Datagram request/response, JSON payloads, no framing (one message per
+datagram):
+
+- Host broadcasts `{"method": "discover"}` to UDP port 8556
+  (255.255.255.255 and/or per-interface broadcast addresses; unicast works
+  too). Extra members are ignored.
+- Each device answers with a single unicast datagram to the sender:
+
+```json
+{"device": "camera-streamer", "version": "0.3.0",
+ "rtsp_port": 8554, "control_port": 8555,
+ "cameras": [{"index": 0, "mount": "/cam0", "enabled": true},
+             {"index": 1, "mount": "/cam1", "enabled": true}]}
+```
+
+The device's IP is the reply's source address; stream/control URLs follow
+from it. Anything that is not a JSON object with `"method": "discover"` is
+ignored (no reply). `[server] discovery-port` configures the port, `0`
+disables discovery. The responder binds 0.0.0.0 regardless of `listen=` —
+it only reveals what a port scan would.
 
 ## Versioning
 

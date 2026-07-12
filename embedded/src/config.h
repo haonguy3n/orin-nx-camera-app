@@ -39,6 +39,8 @@ struct Config {
     // TCP control server (proto/PROTOCOL.md), bound to the same address as
     // the RTSP server. 0 disables it.
     int control_port = 8555;
+    // UDP discovery responder (always 0.0.0.0). 0 disables it.
+    int discovery_port = 8556;
     CameraConfig cameras[kNumCameras];
 };
 

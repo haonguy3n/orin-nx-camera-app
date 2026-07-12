@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -10,6 +11,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMediaPlayer>
+#include <QMenu>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
@@ -18,6 +20,7 @@
 #include <QVideoWidget>
 
 #include "controlclient.h"
+#include "discoveryclient.h"
 
 namespace {
 
@@ -34,16 +37,21 @@ MainWindow::MainWindow(QWidget *parent)
     auto *central = new QWidget(this);
     auto *rootLayout = new QVBoxLayout(central);
 
-    // Top bar: host/URL entry + connect/disconnect toggle.
+    // Top bar: host/URL entry + connect/disconnect toggle + discovery.
     auto *topBar = new QHBoxLayout;
     auto *hostLabel = new QLabel(QStringLiteral("Device:"), central);
     m_hostEdit = new QLineEdit(QStringLiteral("192.168.55.1"), central);
     m_hostEdit->setToolTip(
         QStringLiteral("Device IP/hostname, or an rtsp://host:port base URL"));
     m_connectButton = new QPushButton(QStringLiteral("Connect"), central);
+    m_discoverButton = new QPushButton(QStringLiteral("Discover"), central);
+    m_discoverButton->setToolTip(
+        QStringLiteral("find devices via UDP broadcast (port 8556)"));
+    m_discoverMenu = new QMenu(m_discoverButton);
     topBar->addWidget(hostLabel);
     topBar->addWidget(m_hostEdit, 1);
     topBar->addWidget(m_connectButton);
+    topBar->addWidget(m_discoverButton);
     rootLayout->addLayout(topBar);
 
     // Two video panes side by side, control panel on the right.
@@ -101,6 +109,43 @@ MainWindow::MainWindow(QWidget *parent)
         if (m_connected)
             disconnectStreams();
         connectStreams();
+    });
+
+    // Device discovery (UDP broadcast, ../proto/PROTOCOL.md "Discovery").
+    m_discovery = new DiscoveryClient(this);
+    connect(m_discoverButton, &QPushButton::clicked, this,
+            &MainWindow::runDiscovery);
+
+    connect(m_discovery, &DiscoveryClient::deviceFound, this,
+            [this](const QString &address, const QJsonObject &info) {
+                const QString version =
+                    info.value(QStringLiteral("version"))
+                        .toString(QStringLiteral("?"));
+                QAction *action = m_discoverMenu->addAction(
+                    QStringLiteral("%1 (%2)").arg(address, version));
+                connect(action, &QAction::triggered, this,
+                        [this, address]() { m_hostEdit->setText(address); });
+
+                // Fill the host box, but don't fight the user: only replace
+                // an empty box, the shipped default, or an earlier discovery.
+                const QString current = m_hostEdit->text().trimmed();
+                if (current.isEmpty()
+                    || current == QStringLiteral("192.168.55.1")
+                    || m_discoveredHosts.contains(current))
+                    m_hostEdit->setText(address);
+                if (!m_discoveredHosts.contains(address))
+                    m_discoveredHosts.append(address);
+            });
+
+    connect(m_discovery, &DiscoveryClient::finished, this, [this]() {
+        m_discoverButton->setEnabled(true);
+        const int found = m_discoverMenu->actions().count();
+        if (found == 0)
+            m_errorLabel->setText(QStringLiteral("no devices found"));
+        else if (found > 1)
+            // Several devices: let the user pick which fills the host box.
+            m_discoverMenu->popup(m_discoverButton->mapToGlobal(
+                QPoint(0, m_discoverButton->height())));
     });
 }
 
@@ -177,10 +222,19 @@ QWidget *MainWindow::createControlPanel()
     m_errorLabel = new QLabel(statusGroup);
     m_errorLabel->setWordWrap(true);
     m_errorLabel->setStyleSheet(QStringLiteral("color: #c04040;"));
+    m_syncCheck = new QCheckBox(QStringLiteral("Sync trigger"), statusGroup);
+    m_syncCheck->setToolTip(QStringLiteral(
+        "hardware-synchronized capture: all cameras → external trigger"));
+    m_syncCheck->setEnabled(false);
     statusLayout->addWidget(m_controlStatus);
     statusLayout->addWidget(m_deviceStatus);
+    statusLayout->addWidget(m_syncCheck);
     statusLayout->addWidget(m_errorLabel);
     layout->addWidget(statusGroup);
+
+    // clicked (not toggled): user toggles only, never programmatic reverts.
+    connect(m_syncCheck, &QCheckBox::clicked, this,
+            [this](bool enabled) { applySync(enabled); });
 
     layout->addWidget(createCameraGroup(0));
     layout->addWidget(createCameraGroup(1));
@@ -226,6 +280,13 @@ QWidget *MainWindow::createCameraGroup(int index)
     controls.trigger->addItem(QStringLiteral("7 stream level"));
     form->addRow(QStringLiteral("Trigger:"), controls.trigger);
 
+    controls.fire = new QPushButton(QStringLiteral("Fire"), controls.group);
+    controls.fire->setToolTip(QStringLiteral(
+        "software single trigger — set trigger mode 4 first"));
+    form->addRow(controls.fire);
+
+    connect(controls.fire, &QPushButton::clicked, this,
+            [this, index]() { fireTrigger(index); });
     connect(controls.exposure, &QSpinBox::editingFinished, this,
             [this, index]() { applyExposure(index); });
     connect(controls.gain, &QDoubleSpinBox::editingFinished, this,
@@ -303,6 +364,7 @@ void MainWindow::setCameraControlsEnabled(bool enabled)
 {
     for (CameraControls &controls : m_cameraControls)
         controls.group->setEnabled(enabled);
+    m_syncCheck->setEnabled(enabled);
 }
 
 void MainWindow::pollStatus()
@@ -328,9 +390,21 @@ void MainWindow::pollStatus()
                 if (camera.value(QStringLiteral("streaming")).toBool()) {
                     const qint64 frames = static_cast<qint64>(
                         camera.value(QStringLiteral("frames")).toDouble());
-                    lines << QStringLiteral("cam%1: streaming, %2 frames")
-                                 .arg(index)
-                                 .arg(frames);
+                    QString line = QStringLiteral("cam%1: streaming, %2 frames")
+                                       .arg(index)
+                                       .arg(frames);
+                    // Optional (present while frames flow): last_frame
+                    // metadata — the sequence number is the sync check.
+                    const QJsonValue lastFrame =
+                        camera.value(QStringLiteral("last_frame"));
+                    if (lastFrame.isObject()) {
+                        const qint64 sequence = static_cast<qint64>(
+                            lastFrame.toObject()
+                                .value(QStringLiteral("sequence"))
+                                .toDouble());
+                        line += QStringLiteral(", seq %1").arg(sequence);
+                    }
+                    lines << line;
                 } else {
                     lines << QStringLiteral("cam%1: idle").arg(index);
                 }
@@ -413,6 +487,43 @@ void MainWindow::applyTrigger(int camera, int item)
                 showRequestError(
                     QStringLiteral("cam%1 set-trigger").arg(camera), error);
         });
+}
+
+void MainWindow::applySync(bool enabled)
+{
+    QJsonObject params;
+    params.insert(QStringLiteral("enabled"), enabled);
+    m_control->sendRequest(
+        QStringLiteral("set-sync"), params,
+        [this, enabled](const QJsonObject &, const QJsonObject &error) {
+            if (error.isEmpty())
+                return;
+            // The device changed nothing on error — revert the checkbox.
+            m_syncCheck->blockSignals(true);
+            m_syncCheck->setChecked(!enabled);
+            m_syncCheck->blockSignals(false);
+            showRequestError(QStringLiteral("set-sync"), error);
+        });
+}
+
+void MainWindow::fireTrigger(int camera)
+{
+    QJsonObject params;
+    params.insert(QStringLiteral("camera"), camera);
+    m_control->sendRequest(
+        QStringLiteral("fire-trigger"), params,
+        [this, camera](const QJsonObject &, const QJsonObject &error) {
+            if (!error.isEmpty())
+                showRequestError(
+                    QStringLiteral("cam%1 fire-trigger").arg(camera), error);
+        });
+}
+
+void MainWindow::runDiscovery()
+{
+    m_discoverButton->setEnabled(false);  // re-enabled on finished()
+    m_discoverMenu->clear();
+    m_discovery->discover();
 }
 
 void MainWindow::showRequestError(const QString &what, const QJsonObject &error)

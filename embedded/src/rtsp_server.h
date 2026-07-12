@@ -14,6 +14,12 @@ struct StreamStatus {
     bool mounted = false;    // camera enabled, factory installed
     bool streaming = false;  // a (shared) media pipeline is currently live
     guint64 frames = 0;      // buffers through the payloader since start()
+    // Metadata of the newest frame (valid once frames > 0): capture
+    // sequence (v4l2 frame sequence when the source provides it), buffer
+    // PTS in ns, and the wallclock µs when it passed the payloader.
+    guint64 sequence = 0;
+    guint64 pts = 0;
+    gint64 wallclock = 0;
 };
 
 class RtspServer {
@@ -53,11 +59,18 @@ private:
         GWeakRef media;   // live GstRTSPMedia (shared factory: one at a time)
         GWeakRef source;  // "camsrc" element inside the live pipeline
         std::atomic<guint64> frames{0};
+        // Last-frame metadata, written by the streaming thread's pad probe.
+        std::atomic<guint64> last_sequence{0};
+        std::atomic<guint64> last_pts{0};
+        std::atomic<gint64> last_wallclock{0};
         // Watchdog bookkeeping (main loop thread only).
         guint64 last_frames = 0;
         int stalled_checks = 0;
     };
 
+    static GstPadProbeReturn on_payload_buffer(GstPad* pad,
+                                               GstPadProbeInfo* info,
+                                               gpointer user_data);
     static void on_media_configure(GstRTSPMediaFactory* factory,
                                    GstRTSPMedia* media, gpointer user_data);
     static void on_media_unprepared(GstRTSPMedia* media, gpointer user_data);

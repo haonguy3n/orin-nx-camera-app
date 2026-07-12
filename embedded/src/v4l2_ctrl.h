@@ -39,3 +39,7 @@ bool v4l2_set_control(const std::string& device, const std::string& control,
 // falls back to the first non-button control containing "trigger").
 bool v4l2_set_trigger_mode(const std::string& device, int mode,
                            std::string* error);
+
+// Presses the VC driver's software "single trigger" button control (exposes
+// one frame when the sensor is in a software-triggerable trigger mode).
+bool v4l2_fire_single_trigger(const std::string& device, std::string* error);

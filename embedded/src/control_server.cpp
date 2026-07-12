@@ -52,6 +52,17 @@ bool param_int(JsonObject* params, const char* name, int64_t* out) {
     return true;
 }
 
+bool param_bool(JsonObject* params, const char* name, bool* out) {
+    if (params == nullptr || !json_object_has_member(params, name))
+        return false;
+    JsonNode* n = json_object_get_member(params, name);
+    if (!JSON_NODE_HOLDS_VALUE(n) ||
+        json_node_get_value_type(n) != G_TYPE_BOOLEAN)
+        return false;
+    *out = json_node_get_boolean(n) != FALSE;
+    return true;
+}
+
 bool param_double(JsonObject* params, const char* name, double* out) {
     int64_t i;
     if (params == nullptr || !json_object_has_member(params, name))
@@ -427,6 +438,17 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
                 json_builder_add_boolean_value(b, s.streaming);
                 json_builder_set_member_name(b, "frames");
                 json_builder_add_int_value(b, s.frames);
+                if (s.frames > 0) {
+                    json_builder_set_member_name(b, "last_frame");
+                    json_builder_begin_object(b);
+                    json_builder_set_member_name(b, "sequence");
+                    json_builder_add_int_value(b, s.sequence);
+                    json_builder_set_member_name(b, "pts");
+                    json_builder_add_int_value(b, s.pts);
+                    json_builder_set_member_name(b, "wallclock");
+                    json_builder_add_int_value(b, s.wallclock);
+                    json_builder_end_object(b);
+                }
             }
             json_builder_end_object(b);
         }
@@ -520,6 +542,46 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
             return failed(err);
         cam.trigger = static_cast<int>(mode);
         g_message("control: cam%d trigger mode = %d", cam_idx, cam.trigger);
+        return empty_result();
+    }
+
+    if (m == "set-sync") {
+        bool enabled;
+        if (!param_bool(params, "enabled", &enabled))
+            return invalid("enabled must be a boolean");
+        // All-or-nothing precheck: hardware sync only makes sense when every
+        // enabled camera is on the v4l2 path.
+        for (int i = 0; i < Config::kNumCameras; ++i) {
+            const CameraConfig& cam = cfg.cameras[i];
+            if (cam.enabled && cam.source != "v4l2")
+                return failed("cam" + std::to_string(i) + " is source '" +
+                              cam.source + "'; sync requires v4l2");
+        }
+        const int mode = enabled ? 1 : 0;  // external / free running
+        for (int i = 0; i < Config::kNumCameras; ++i) {
+            CameraConfig& cam = cfg.cameras[i];
+            if (!cam.enabled)
+                continue;
+            std::string err;
+            if (!v4l2_set_trigger_mode(cam.device, mode, &err))
+                return failed(err);
+            cam.trigger = mode;
+        }
+        g_message("control: sync trigger %s", enabled ? "on" : "off");
+        return empty_result();
+    }
+
+    if (m == "fire-trigger") {
+        int cam_idx;
+        if (!param_camera(params, &cam_idx))
+            return invalid("camera must be 0 or 1");
+        const CameraConfig& cam = cfg.cameras[cam_idx];
+        if (cam.source != "v4l2")
+            return failed("software trigger requires the v4l2 source "
+                          "(current source '" + cam.source + "')");
+        std::string err;
+        if (!v4l2_fire_single_trigger(cam.device, &err))
+            return failed(err);
         return empty_result();
     }
 

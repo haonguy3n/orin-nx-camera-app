@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(camera-streamer VERSION 0.2.0 LANGUAGES CXX)
+project(camera-streamer VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,6 +20,7 @@ add_executable(camera-streamer
     src/main.cpp
     src/config.cpp
     src/control_server.cpp
+    src/discovery_server.cpp
     src/net_util.cpp
     src/rtsp_server.cpp
     src/v4l2_ctrl.cpp

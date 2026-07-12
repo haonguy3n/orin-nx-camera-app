@@ -14,7 +14,10 @@ The device enumerates as a USB network interface (CDC-NCM):
 - host:   `192.168.55.100` (assigned by the device's dnsmasq)
 
 The URL bar accepts either a bare host/IP (`192.168.55.1` → default port 8554
-and mounts) or an `rtsp://host:port` base URL.
+and mounts) or an `rtsp://host:port` base URL. **Discover** (next to Connect)
+broadcasts a UDP discovery request on port **8556** (`../proto/PROTOCOL.md`,
+"Discovery") and fills the host box with the replying device's address; if
+several devices answer, a popup menu on the button lets you pick one.
 
 ## Build
 
@@ -59,11 +62,15 @@ A panel on the right of the video panes talks to the device's control channel:
 newline-delimited JSON over TCP, port **8555** (protocol reference:
 `../proto/PROTOCOL.md`). **Connect** opens it alongside the RTSP streams (same
 host as the video; the control port is always 8555). While connected, the panel
-polls `get-status` every 2 s (per-camera streaming state and frame counter) and
-offers per-camera exposure (µs, 0 = auto), gain (0 = auto) and hardware trigger
-mode (`v4l2` source only). Request errors are shown inline in the Device status
-group — no dialogs. Exposure/gain are seeded once from the first `get-status`
-after connect.
+polls `get-status` every 2 s (per-camera streaming state, frame counter, and —
+while frames flow — the `last_frame` sequence number) and offers per-camera
+exposure (µs, 0 = auto), gain (0 = auto), hardware trigger mode and a **Fire**
+button (`fire-trigger`, software single trigger — set trigger mode 4 first;
+`v4l2` source only). The **Sync trigger** checkbox (`set-sync`) switches every
+camera to external trigger mode for hardware-synchronized capture, and reverts
+itself if the device refuses. Request errors are shown inline in the Device
+status group — no dialogs. Exposure/gain are seeded once from the first
+`get-status` after connect.
 
 ## Milestone 2 roadmap (remaining)
 

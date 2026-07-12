@@ -13,6 +13,8 @@ qt_add_executable(camera-viewer
     mainwindow.h
     controlclient.cpp
     controlclient.h
+    discoveryclient.cpp
+    discoveryclient.h
 )
 
 target_link_libraries(camera-viewer PRIVATE
