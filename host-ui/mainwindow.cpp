@@ -244,7 +244,7 @@ QWidget *MainWindow::createControlPanel()
     scroll->setWidget(panel);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setFixedWidth(300);
+    scroll->setFixedWidth(320);  // leave room for the vertical scrollbar
     return scroll;
 }
 
@@ -284,6 +284,104 @@ QWidget *MainWindow::createCameraGroup(int index)
     controls.fire->setToolTip(QStringLiteral(
         "software single trigger — set trigger mode 4 first"));
     form->addRow(controls.fire);
+
+    // ISP overrides (set-isp, argus source only — the server rejects the
+    // whole group for v4l2/test). Same conventions as above: combos send on
+    // user activation, spin boxes on editingFinished with a lastSent guard.
+    auto *ispGroup = new QGroupBox(QStringLiteral("ISP"), controls.group);
+    auto *ispForm = new QFormLayout(ispGroup);
+
+    controls.wbMode = new QComboBox(ispGroup);
+    controls.wbMode->addItem(QStringLiteral("(unchanged)"));
+    controls.wbMode->addItem(QStringLiteral("0 off"));
+    controls.wbMode->addItem(QStringLiteral("1 auto"));
+    controls.wbMode->addItem(QStringLiteral("2 incandescent"));
+    controls.wbMode->addItem(QStringLiteral("3 fluorescent"));
+    controls.wbMode->addItem(QStringLiteral("4 warm-fluorescent"));
+    controls.wbMode->addItem(QStringLiteral("5 daylight"));
+    controls.wbMode->addItem(QStringLiteral("6 cloudy-daylight"));
+    controls.wbMode->addItem(QStringLiteral("7 twilight"));
+    controls.wbMode->addItem(QStringLiteral("8 shade"));
+    controls.wbMode->addItem(QStringLiteral("9 manual"));
+    ispForm->addRow(QStringLiteral("WB mode:"), controls.wbMode);
+
+    controls.saturation = new QDoubleSpinBox(ispGroup);
+    controls.saturation->setRange(0.0, 2.0);
+    controls.saturation->setDecimals(2);
+    controls.saturation->setSingleStep(0.1);
+    controls.saturation->setValue(1.0);  // 1 = neutral
+    controls.saturation->setProperty("lastSent", 1.0);
+    ispForm->addRow(QStringLiteral("Saturation:"), controls.saturation);
+
+    controls.tnrMode = new QComboBox(ispGroup);
+    controls.tnrMode->addItem(QStringLiteral("(unchanged)"));
+    controls.tnrMode->addItem(QStringLiteral("0 off"));
+    controls.tnrMode->addItem(QStringLiteral("1 fast"));
+    controls.tnrMode->addItem(QStringLiteral("2 high quality"));
+    ispForm->addRow(QStringLiteral("TNR mode:"), controls.tnrMode);
+
+    controls.tnrStrength = new QDoubleSpinBox(ispGroup);
+    controls.tnrStrength->setRange(-1.0, 1.0);
+    controls.tnrStrength->setDecimals(2);
+    controls.tnrStrength->setSingleStep(0.1);
+    controls.tnrStrength->setValue(-1.0);
+    controls.tnrStrength->setSpecialValueText(QStringLiteral("auto")); // -1
+    controls.tnrStrength->setProperty("lastSent", -1.0);
+    ispForm->addRow(QStringLiteral("TNR strength:"), controls.tnrStrength);
+
+    controls.eeMode = new QComboBox(ispGroup);
+    controls.eeMode->addItem(QStringLiteral("(unchanged)"));
+    controls.eeMode->addItem(QStringLiteral("0 off"));
+    controls.eeMode->addItem(QStringLiteral("1 fast"));
+    controls.eeMode->addItem(QStringLiteral("2 high quality"));
+    ispForm->addRow(QStringLiteral("EE mode:"), controls.eeMode);
+
+    controls.eeStrength = new QDoubleSpinBox(ispGroup);
+    controls.eeStrength->setRange(-1.0, 1.0);
+    controls.eeStrength->setDecimals(2);
+    controls.eeStrength->setSingleStep(0.1);
+    controls.eeStrength->setValue(-1.0);
+    controls.eeStrength->setSpecialValueText(QStringLiteral("auto")); // -1
+    controls.eeStrength->setProperty("lastSent", -1.0);
+    ispForm->addRow(QStringLiteral("EE strength:"), controls.eeStrength);
+
+    controls.exposureComp = new QDoubleSpinBox(ispGroup);
+    controls.exposureComp->setRange(-2.0, 2.0);
+    controls.exposureComp->setDecimals(1);
+    controls.exposureComp->setSingleStep(0.5);
+    controls.exposureComp->setValue(0.0);
+    controls.exposureComp->setSuffix(QStringLiteral(" EV"));
+    controls.exposureComp->setProperty("lastSent", 0.0);
+    ispForm->addRow(QStringLiteral("AE comp:"), controls.exposureComp);
+
+    form->addRow(ispGroup);
+
+    connect(controls.wbMode, &QComboBox::activated, this, [this, index](
+            int item) { applyIspCombo(index, QStringLiteral("wbmode"), item); });
+    connect(controls.tnrMode, &QComboBox::activated, this, [this, index](
+            int item) { applyIspCombo(index, QStringLiteral("tnr-mode"), item); });
+    connect(controls.eeMode, &QComboBox::activated, this, [this, index](
+            int item) { applyIspCombo(index, QStringLiteral("ee-mode"), item); });
+    connect(controls.saturation, &QDoubleSpinBox::editingFinished, this,
+            [this, index]() {
+                applyIspSpin(index, QStringLiteral("saturation"),
+                             m_cameraControls[index].saturation);
+            });
+    connect(controls.tnrStrength, &QDoubleSpinBox::editingFinished, this,
+            [this, index]() {
+                applyIspSpin(index, QStringLiteral("tnr-strength"),
+                             m_cameraControls[index].tnrStrength);
+            });
+    connect(controls.eeStrength, &QDoubleSpinBox::editingFinished, this,
+            [this, index]() {
+                applyIspSpin(index, QStringLiteral("ee-strength"),
+                             m_cameraControls[index].eeStrength);
+            });
+    connect(controls.exposureComp, &QDoubleSpinBox::editingFinished, this,
+            [this, index]() {
+                applyIspSpin(index, QStringLiteral("exposurecompensation"),
+                             m_cameraControls[index].exposureComp);
+            });
 
     connect(controls.fire, &QPushButton::clicked, this,
             [this, index]() { fireTrigger(index); });
@@ -421,6 +519,9 @@ void MainWindow::pollStatus()
                     controls.exposure->setProperty("lastSent", us);
                     controls.gain->setValue(gain);
                     controls.gain->setProperty("lastSent", gain);
+                    seedIspControls(
+                        controls,
+                        camera.value(QStringLiteral("isp")).toObject());
                 }
             }
             m_controlsPopulated = true;
@@ -517,6 +618,84 @@ void MainWindow::fireTrigger(int camera)
                 showRequestError(
                     QStringLiteral("cam%1 fire-trigger").arg(camera), error);
         });
+}
+
+void MainWindow::applyIsp(int camera, const QString &param,
+                          const QJsonValue &value)
+{
+    QJsonObject params;
+    params.insert(QStringLiteral("camera"), camera);
+    params.insert(QStringLiteral("param"), param);
+    params.insert(QStringLiteral("value"), value);
+    m_control->sendRequest(
+        QStringLiteral("set-isp"), params,
+        [this, camera, param](const QJsonObject &, const QJsonObject &error) {
+            if (!error.isEmpty())
+                showRequestError(QStringLiteral("cam%1 set-isp %2")
+                                     .arg(camera)
+                                     .arg(param),
+                                 error);
+        });
+}
+
+void MainWindow::applyIspCombo(int camera, const QString &param, int item)
+{
+    if (item <= 0)  // item 0 is "(unchanged)": send nothing
+        return;
+    applyIsp(camera, param, item - 1);
+}
+
+void MainWindow::applyIspSpin(int camera, const QString &param,
+                              QDoubleSpinBox *box)
+{
+    const double value = box->value();
+    const QVariant lastSent = box->property("lastSent");
+    if (lastSent.isValid() && lastSent.toDouble() == value)
+        return;
+    box->setProperty("lastSent", value);
+    applyIsp(camera, param, value);
+}
+
+void MainWindow::seedIspControls(CameraControls &controls,
+                                 const QJsonObject &isp)
+{
+    // ISP override values arrive as strings (PROTOCOL.md); tolerate plain
+    // numbers too. Absent/unparseable params leave the widget alone.
+    const auto number = [&isp](const QString &param, double *out) {
+        const QJsonValue value = isp.value(param);
+        if (value.isDouble()) {
+            *out = value.toDouble();
+            return true;
+        }
+        bool ok = false;
+        const double parsed = value.toString().toDouble(&ok);
+        if (ok)
+            *out = parsed;
+        return ok;
+    };
+    const auto seedSpin = [&number](QDoubleSpinBox *box, const QString &param) {
+        double value = 0.0;
+        if (!number(param, &value))
+            return;
+        box->setValue(value);
+        box->setProperty("lastSent", value);
+    };
+    const auto seedCombo = [&number](QComboBox *box, const QString &param) {
+        double value = 0.0;
+        if (!number(param, &value))
+            return;
+        const int mode = static_cast<int>(value);
+        if (mode >= 0 && mode + 1 < box->count())
+            box->setCurrentIndex(mode + 1);  // never emits activated
+    };
+
+    seedCombo(controls.wbMode, QStringLiteral("wbmode"));
+    seedSpin(controls.saturation, QStringLiteral("saturation"));
+    seedCombo(controls.tnrMode, QStringLiteral("tnr-mode"));
+    seedSpin(controls.tnrStrength, QStringLiteral("tnr-strength"));
+    seedCombo(controls.eeMode, QStringLiteral("ee-mode"));
+    seedSpin(controls.eeStrength, QStringLiteral("ee-strength"));
+    seedSpin(controls.exposureComp, QStringLiteral("exposurecompensation"));
 }
 
 void MainWindow::runDiscovery()

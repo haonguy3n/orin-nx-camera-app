@@ -23,3 +23,8 @@ IMAGE_INSTALL += " \
     usb-gadget-init \
     camera-streamer \
 "
+
+# Static ISP tuning for the color IMX296C. Uncomment once VC's
+# camera_overrides.isp is dropped into
+# recipes-bsp/isp-tuning/files/ (see the README there).
+#IMAGE_INSTALL += "vc-isp-tuning"

@@ -141,6 +141,38 @@ timing and does not support external trigger):
 The exact set depends on the driver; out-of-range values return the V4L2
 error. `-1` in config/`get-status` means "never set, driver default".
 
+### `set-isp`
+
+`{"camera": 0|1, "param": "<name>", "value": <string|number|bool|null>}` → `{}`
+
+Runtime ISP controls, `argus` source only (the v4l2 path bypasses the ISP).
+`param` is one of the whitelisted `nvarguscamerasrc` properties:
+
+| param | value | meaning |
+|---|---|---|
+| `wbmode` | 0–9 | white balance: 0 off, 1 auto, 2 incandescent, 3 fluorescent, 4 warm-fluorescent, 5 daylight, 6 cloudy-daylight, 7 twilight, 8 shade, 9 manual |
+| `saturation` | 0.0–2.0 | color saturation (1 = neutral) |
+| `tnr-mode` | 0–2 | temporal noise reduction: off / fast / high quality |
+| `tnr-strength` | -1.0–1.0 | TNR strength (-1 = auto) |
+| `ee-mode` | 0–2 | edge enhancement: off / fast / high quality |
+| `ee-strength` | -1.0–1.0 | EE strength (-1 = auto) |
+| `aeantibanding` | 0–3 | off / auto / 50 Hz / 60 Hz |
+| `exposurecompensation` | -2.0–2.0 | AE compensation in stops |
+| `aelock` / `awblock` | bool | lock auto-exposure / auto-white-balance |
+| `ispdigitalgainrange` | "min max" | ISP digital gain range, e.g. `"1 4"` |
+
+The value is applied to the live pipeline (if any) and remembered, so
+pipelines created later inherit it; `value: null` forgets the override
+(takes effect on the next pipeline — a live pipeline keeps the last value).
+Current overrides appear as the `isp` object in `get-config`/`get-status`
+cameras, and can be preset from the config file with `isp-<param>=` keys
+(e.g. `isp-wbmode=1`). Ranges are per L4T r35 `nvarguscamerasrc`; invalid
+values are rejected by the element, not by this API.
+
+Note: `set-isp` adjusts Argus's runtime processing. The static tuning
+(lens shading, CCM, gamma) lives in `camera_overrides.isp` on the device —
+see `yocto/meta-vc-camera/recipes-bsp/isp-tuning/`.
+
 ### `set-sync`
 
 `{"enabled": true|false}` → `{}`

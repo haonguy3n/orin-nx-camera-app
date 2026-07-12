@@ -25,6 +25,10 @@ std::string argus_ranges(const CameraConfig& cam) {
         g_snprintf(buf, sizeof(buf), "%g", cam.gain);
         s += " gainrange=\"" + std::string(buf) + " " + buf + "\"";
     }
+    // ISP overrides (isp-* config keys / set-isp): always quoted, which
+    // gst_parse_launch accepts for every property type.
+    for (const auto& [property, value] : cam.isp)
+        s += " " + property + "=\"" + value + "\"";
     return s;
 }
 

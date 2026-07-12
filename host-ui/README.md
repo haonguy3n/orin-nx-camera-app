@@ -72,6 +72,12 @@ itself if the device refuses. Request errors are shown inline in the Device
 status group — no dialogs. Exposure/gain are seeded once from the first
 `get-status` after connect.
 
+Each camera group also has an **ISP** sub-group (`set-isp` — `argus` source
+only, the device rejects it for `v4l2`/`test`): white-balance mode, saturation,
+temporal noise reduction and edge enhancement (mode + strength, -1 = auto), and
+AE exposure compensation. Values map 1:1 onto `nvarguscamerasrc` properties;
+current overrides are seeded from the `isp` object in the first `get-status`.
+
 ## Milestone 2 roadmap (remaining)
 
 - Per-pane stream stats and reconnect-on-stall handling.

@@ -1,0 +1,42 @@
+# ISP tuning for the color IMX296C (argus path)
+
+Jetson ISP tuning has three layers; this recipe covers the middle one.
+
+1. **Runtime controls** — white balance, saturation, TNR/EE, AE
+   antibanding, exposure compensation. Already supported: `set-isp` in the
+   control protocol (`proto/PROTOCOL.md`), the ISP group in the host UI, and
+   `isp-*` keys in `/etc/camera-streamer.conf`. Nothing to do here.
+2. **Static tuning file** (`camera_overrides.isp`) — lens shading, color
+   correction matrix, gamma, demosaic parameters. libargus loads it from
+   `/var/nvidia/nvcam/settings/` at camera open and applies it over the
+   default tuning. **This recipe installs that file** — but the file itself
+   must come from Vision Components (ask their support for the IMX296C
+   overrides matching your lens) or from an NVIDIA camera tuning partner.
+3. **Full sensor characterization** — NVIDIA's ISP tuning suite (partner
+   tooling), lab targets, real hardware. Out of scope for this layer;
+   its output is again a `camera_overrides.isp`, deployed the same way.
+
+## Enabling
+
+1. Put the tuning file at `files/camera_overrides.isp` (next to this
+   README).
+2. Add the package to the image — in `recipes-images/camera-image.bb`,
+   uncomment:
+
+   ```bitbake
+   IMAGE_INSTALL += "vc-isp-tuning"
+   ```
+
+Without the file present, building `vc-isp-tuning` fails at do_fetch —
+that's why it is not in the image by default.
+
+## Verifying on target
+
+```sh
+ls -l /var/nvidia/nvcam/settings/camera_overrides.isp   # must be mode 664
+systemctl restart camera-streamer                        # reopen the sensor
+```
+
+A wrong mode or a syntactically broken file is *silently ignored* by
+Argus — compare image saturation/shading before and after to confirm it
+took effect.

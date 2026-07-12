@@ -11,6 +11,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
 class QJsonObject;
+class QJsonValue;
 class QLabel;
 class QLineEdit;
 class QMediaPlayer;
@@ -41,6 +42,14 @@ private:
         QDoubleSpinBox *gain = nullptr;
         QComboBox *trigger = nullptr;
         QPushButton *fire = nullptr;
+        // ISP overrides (argus source only, PROTOCOL.md set-isp).
+        QComboBox *wbMode = nullptr;
+        QDoubleSpinBox *saturation = nullptr;
+        QComboBox *tnrMode = nullptr;
+        QDoubleSpinBox *tnrStrength = nullptr;
+        QComboBox *eeMode = nullptr;
+        QDoubleSpinBox *eeStrength = nullptr;
+        QDoubleSpinBox *exposureComp = nullptr;
     };
 
     QWidget *createPane(Pane &pane, const QString &name);
@@ -58,6 +67,10 @@ private:
     void applyTrigger(int camera, int item);
     void applySync(bool enabled);
     void fireTrigger(int camera);
+    void applyIsp(int camera, const QString &param, const QJsonValue &value);
+    void applyIspCombo(int camera, const QString &param, int item);
+    void applyIspSpin(int camera, const QString &param, QDoubleSpinBox *box);
+    void seedIspControls(CameraControls &controls, const QJsonObject &isp);
     void runDiscovery();
     void showRequestError(const QString &what, const QJsonObject &error);
 

@@ -1,6 +1,7 @@
 // camera-streamer configuration (GKeyFile INI).
 #pragma once
 
+#include <map>
 #include <string>
 
 // One camera = one RTSP mount (/cam0, /cam1).
@@ -22,6 +23,11 @@ struct CameraConfig {
     double gain = 0;                // 0 = auto/default; argus: multiplier,
                                     // v4l2: raw control units (VC: 0.1 dB)
     int trigger = -1;               // VC trigger mode 0..7; -1 = leave as is
+
+    // Runtime ISP overrides (argus only): nvarguscamerasrc property ->
+    // value, appended to the launch string and settable live via set-isp.
+    // Config file: isp-<property>= keys, e.g. isp-wbmode=1.
+    std::map<std::string, std::string> isp;
 };
 
 struct Config {

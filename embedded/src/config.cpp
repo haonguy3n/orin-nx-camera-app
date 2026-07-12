@@ -2,6 +2,8 @@
 
 #include <glib.h>
 
+#include <cstring>
+
 namespace {
 
 int get_int(GKeyFile* kf, const char* group, const char* key, int def) {
@@ -132,6 +134,18 @@ Config load_config(const std::string& path) {
         cam.exposure = get_int(kf, group, "exposure", cam.exposure);
         cam.gain = get_double(kf, group, "gain", cam.gain);
         cam.trigger = get_int(kf, group, "trigger", cam.trigger);
+
+        // isp-<property> keys become nvarguscamerasrc property overrides
+        // (validated against the whitelist where set-isp is served too).
+        gchar** keys = g_key_file_get_keys(kf, group, nullptr, nullptr);
+        for (gchar** k = keys; k != nullptr && *k != nullptr; ++k) {
+            if (!g_str_has_prefix(*k, "isp-"))
+                continue;
+            const std::string value = get_string(kf, group, *k, "");
+            if (!value.empty())
+                cam.isp[*k + strlen("isp-")] = value;
+        }
+        g_strfreev(keys);
     }
 
     g_key_file_free(kf);

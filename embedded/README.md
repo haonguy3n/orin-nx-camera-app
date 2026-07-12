@@ -57,6 +57,7 @@ ships in `config/camera-streamer.conf`. All keys:
 | | `exposure` | `0` | µs; `0` = auto (argus) / driver default (v4l2) |
 | | `gain` | `0` | `0` = auto/default; argus: analog gain multiplier, v4l2: raw VC driver units (0.1 dB) |
 | | `trigger` | `-1` | VC hardware trigger mode 0–7, v4l2 source only; `-1` = leave driver default |
+| | `isp-<property>` | — | argus only: preset an nvarguscamerasrc ISP property (`isp-wbmode=1`, `isp-saturation=1.2`, …); same whitelist as the protocol's `set-isp` |
 
 The final GStreamer launch string for every mount is logged at startup —
 useful for reproducing issues with plain `gst-launch-1.0`.

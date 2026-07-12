@@ -18,6 +18,23 @@ constexpr int kUnknownMethod = -32601;
 constexpr int kInvalidParams = -32602;
 constexpr int kFailed = 1;
 
+// nvarguscamerasrc properties settable via set-isp (proto/PROTOCOL.md).
+// Everything else on the element (sensor-id, ranges, ...) is owned by the
+// launch string / dedicated methods and must not be poked freely.
+const char* const kIspParams[] = {
+    "wbmode",         "saturation",  "tnr-mode",
+    "tnr-strength",   "ee-mode",     "ee-strength",
+    "aeantibanding",  "exposurecompensation",
+    "aelock",         "awblock",     "ispdigitalgainrange",
+};
+
+bool is_isp_param(const std::string& name) {
+    for (const char* p : kIspParams)
+        if (name == p)
+            return true;
+    return false;
+}
+
 // "Auto" ranges handed to nvarguscamerasrc when exposure/gain is set back
 // to 0: wide enough to give the 3A loop its freedom back, clamped by Argus
 // to the sensor's real limits (there is no property to truly unset a range).
@@ -137,6 +154,13 @@ void add_camera_config(JsonBuilder* b, int index, const CameraConfig& cam) {
     json_builder_add_double_value(b, cam.gain);
     json_builder_set_member_name(b, "trigger");
     json_builder_add_int_value(b, cam.trigger);
+    json_builder_set_member_name(b, "isp");
+    json_builder_begin_object(b);
+    for (const auto& [property, value] : cam.isp) {
+        json_builder_set_member_name(b, property.c_str());
+        json_builder_add_string_value(b, value.c_str());
+    }
+    json_builder_end_object(b);
 }
 
 void add_v4l2_control(JsonBuilder* b, const V4l2Control& c) {
@@ -542,6 +566,59 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
             return failed(err);
         cam.trigger = static_cast<int>(mode);
         g_message("control: cam%d trigger mode = %d", cam_idx, cam.trigger);
+        return empty_result();
+    }
+
+    if (m == "set-isp") {
+        int cam_idx;
+        if (!param_camera(params, &cam_idx))
+            return invalid("camera must be 0 or 1");
+        CameraConfig& cam = cfg.cameras[cam_idx];
+        if (cam.source != "argus")
+            return failed("ISP controls require the argus source "
+                          "(current source '" + cam.source + "')");
+
+        std::string name;
+        if (params != nullptr && json_object_has_member(params, "param")) {
+            JsonNode* n = json_object_get_member(params, "param");
+            if (JSON_NODE_HOLDS_VALUE(n) &&
+                json_node_get_value_type(n) == G_TYPE_STRING)
+                name = json_node_get_string(n);
+        }
+        if (!is_isp_param(name))
+            return invalid("param must be one of the nvarguscamerasrc ISP "
+                           "properties (see PROTOCOL.md)");
+
+        if (params == nullptr || !json_object_has_member(params, "value"))
+            return invalid("missing value");
+        JsonNode* vn = json_object_get_member(params, "value");
+        if (JSON_NODE_HOLDS_NULL(vn)) {  // forget the override
+            cam.isp.erase(name);
+            g_message("control: cam%d isp %s reset", cam_idx, name.c_str());
+            return empty_result();
+        }
+        if (!JSON_NODE_HOLDS_VALUE(vn))
+            return invalid("value must be a string, number, bool or null");
+        std::string value;
+        const GType t = json_node_get_value_type(vn);
+        if (t == G_TYPE_STRING) {
+            value = json_node_get_string(vn);
+        } else if (t == G_TYPE_BOOLEAN) {
+            value = json_node_get_boolean(vn) ? "true" : "false";
+        } else if (t == G_TYPE_INT64) {
+            value = std::to_string(json_node_get_int(vn));
+        } else {
+            char buf[32];
+            g_snprintf(buf, sizeof(buf), "%g", json_node_get_double(vn));
+            value = buf;
+        }
+
+        cam.isp[name] = value;
+        // Live pipeline picks it up now; otherwise the launch string will.
+        if (rtsp != nullptr)
+            rtsp->set_source_property(cam_idx, name.c_str(), value.c_str());
+        g_message("control: cam%d isp %s = %s", cam_idx, name.c_str(),
+                  value.c_str());
         return empty_result();
     }
 

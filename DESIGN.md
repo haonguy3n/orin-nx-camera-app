@@ -309,7 +309,7 @@ trigger wiring, OTA, factory flash flow.
 | Risk | Mitigation |
 |---|---|
 | Exact L4T minor (35.6.0 vs .1/.2) vs VC patch set | Check `L4T_VERSION` in the build; diff-review VC patches against the actual kernel tree; pin the pair in the layer. |
-| Color IMX296C image quality via Argus (ISP tuning) | Start with VC defaults; mono modules bypass the issue via the V4L2 path. |
+| Color IMX296C image quality via Argus (ISP tuning) | Runtime ISP controls shipped (`set-isp`: WB/saturation/TNR/EE/AE, host-UI ISP group); static tuning deploys via the `vc-isp-tuning` recipe once VC's `camera_overrides.isp` is obtained (see `recipes-bsp/isp-tuning/README.md`). Mono modules bypass the issue via the V4L2 path. |
 | USB2-only device mode (~350 Mbit/s) | HW encode on device (designed in). If the host ever needs raw frames, use GigE or reduced fps/ROI. |
 | DTB is flashed on JP5 → slow DT iteration | Script the DTB-only reflash path during bring-up. |
 | Future JP6 migration changes integration model (nvidia-oot + .dtbo overlays) | Isolated in `meta-vc-camera` (one bbappend + DT recipe swap); app and gadget layers unaffected. |
