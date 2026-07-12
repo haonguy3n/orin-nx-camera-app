@@ -10,12 +10,14 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
+#include <QPalette>
 #include <QLineEdit>
 #include <QMediaPlayer>
 #include <QMenu>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QVideoFrame>
@@ -180,27 +182,38 @@ QWidget *MainWindow::createPane(Pane &pane, const QString &name)
 
     auto *container = new QWidget(this);
     container->setAutoFillBackground(true);
+    // Black background for the pane container — shows through as the idle
+    // video surface color when no stream is playing, and prevents the
+    // desktop / GPU noise from being visible during window drags.
+    QPalette containerPal = container->palette();
+    containerPal.setColor(QPalette::Window, Qt::black);
+    container->setPalette(containerPal);
     auto *layout = new QVBoxLayout(container);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(4);
 
+    // Idle page: a plain black widget. Paint attributes cannot tame an idle
+    // QVideoWidget — its GPU surface holds uninitialized memory, so the
+    // desktop bleeds through no matter what the palette says. Swap the
+    // whole widget out instead of trying to repaint it.
+    pane.placeholder = new QWidget(container);
+    pane.placeholder->setAutoFillBackground(true);
+    QPalette blackPal = pane.placeholder->palette();
+    blackPal.setColor(QPalette::Window, Qt::black);
+    pane.placeholder->setPalette(blackPal);
+
     pane.video = new QVideoWidget(container);
-    pane.video->setMinimumSize(320, 240);
-    // QVideoWidget sets WA_OpaquePaintEvent internally, so autoFillBackground
-    // alone does nothing — it promises to paint every pixel but paints
-    // nothing when idle, leaving the desktop visible during window drags.
-    // Clear that attribute and force a black stylesheet background (the
-    // convention for idle video surfaces) so the widget is actually opaque.
-    pane.video->setAttribute(Qt::WA_OpaquePaintEvent, false);
-    pane.video->setAutoFillBackground(true);
-    pane.video->setStyleSheet(QStringLiteral("background: #000000;"));
+
+    pane.stack = new QStackedWidget(container);
+    pane.stack->setMinimumSize(320, 240);
+    pane.stack->addWidget(pane.placeholder);  // index 0: idle
+    pane.stack->addWidget(pane.video);        // index 1: live
+    showVideo(pane, false);
 
     pane.status = new QLabel(container);
     pane.status->setWordWrap(true);
-    pane.status->setStyleSheet(QStringLiteral(
-        "padding: 2px 4px; background: #f8f8f8; border-radius: 2px;"));
 
-    layout->addWidget(pane.video, 1);
+    layout->addWidget(pane.stack, 1);
     layout->addWidget(pane.status);
 
     pane.player = new QMediaPlayer(this);
@@ -213,6 +226,7 @@ QWidget *MainWindow::createPane(Pane &pane, const QString &name)
     connect(pane.player, &QMediaPlayer::errorOccurred, this,
             [this, p](QMediaPlayer::Error, const QString &errorString) {
                 setStatus(*p, QStringLiteral("error: %1").arg(errorString));
+                showVideo(*p, false);
             });
 
     connect(pane.player, &QMediaPlayer::mediaStatusChanged, this,
@@ -228,17 +242,29 @@ QWidget *MainWindow::createPane(Pane &pane, const QString &name)
                     break;
                 case QMediaPlayer::EndOfMedia:
                     setStatus(*p, QStringLiteral("stream ended"));
+                    showVideo(*p, false);
                     break;
                 case QMediaPlayer::InvalidMedia:
                     setStatus(*p, QStringLiteral("error: %1")
                                       .arg(p->player->errorString()));
+                    showVideo(*p, false);
                     break;
                 case QMediaPlayer::NoMedia:
                     setStatus(*p, QStringLiteral("disconnected"));
+                    showVideo(*p, false);
                     break;
                 default:
                     break;
                 }
+            });
+
+    // Raise the video surface only once frames actually reach the sink:
+    // media status alone is optimistic — the surface can still be blank
+    // (and showing garbage) when the player reports buffered.
+    connect(pane.video->videoSink(), &QVideoSink::videoFrameChanged, this,
+            [this, p](const QVideoFrame &frame) {
+                if (frame.isValid())
+                    showVideo(*p, true);
             });
     return container;
 }
@@ -485,6 +511,7 @@ void MainWindow::restartPane(int index)
 {
     Pane &pane = m_panes[index];
     setStatus(pane, QStringLiteral("connecting…"));
+    showVideo(pane, false);  // hide the stale surface until frames return
     pane.player->stop();
     // Reset first: setSource() with the current URL is a no-op in Qt 6,
     // but a zoom change needs a genuinely new RTSP session.
@@ -501,6 +528,7 @@ void MainWindow::disconnectStreams()
         pane.player->stop();
         pane.player->setSource(QUrl());
         setStatus(pane, QStringLiteral("disconnected"));
+        showVideo(pane, false);
     }
     m_control->disconnectFromDevice();
     m_connected = false;
@@ -511,6 +539,12 @@ void MainWindow::disconnectStreams()
 void MainWindow::setStatus(Pane &pane, const QString &text)
 {
     pane.status->setText(QStringLiteral("%1: %2").arg(pane.name, text));
+}
+
+void MainWindow::showVideo(Pane &pane, bool live)
+{
+    pane.stack->setCurrentWidget(live ? static_cast<QWidget *>(pane.video)
+                                      : pane.placeholder);
 }
 
 QUrl MainWindow::streamUrl(int index) const

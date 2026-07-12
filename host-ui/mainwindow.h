@@ -20,6 +20,7 @@ class QMenu;
 class QPushButton;
 class QSpinBox;
 class QTimer;
+class QStackedWidget;
 class QVideoWidget;
 
 class MainWindow : public QMainWindow
@@ -35,7 +36,16 @@ private:
         QMediaPlayer *player = nullptr;
         QVideoWidget *video = nullptr;
         QLabel *status = nullptr;
+        // Qt 6's QVideoWidget renders through a GPU surface holding
+        // uninitialized memory until the first frame lands, so an idle one
+        // shows desktop garbage whatever its palette says. Keep it in a
+        // stack behind a plain black page, raised only while frames flow.
+        QStackedWidget *stack = nullptr;
+        QWidget *placeholder = nullptr;
     };
+
+    // Raise the video surface (live) or the black placeholder (idle).
+    void showVideo(Pane &pane, bool live);
 
     struct CameraControls {
         QGroupBox *group = nullptr;
