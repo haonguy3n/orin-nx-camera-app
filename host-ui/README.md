@@ -78,6 +78,10 @@ temporal noise reduction and edge enhancement (mode + strength, -1 = auto), and
 AE exposure compensation. Values map 1:1 onto `nvarguscamerasrc` properties;
 current overrides are seeded from the `isp` object in the first `get-status`.
 
+A per-camera **Zoom** spin box (`set-zoom`, 1–8× GPU center crop + upscale)
+automatically reconnects that video pane on success — zoom applies to new RTSP
+sessions, so the pane restarts to show the new framing.
+
 ## Milestone 2 roadmap (remaining)
 
 - Per-pane stream stats and reconnect-on-stall handling.

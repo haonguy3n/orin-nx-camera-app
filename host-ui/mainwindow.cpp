@@ -287,6 +287,17 @@ QWidget *MainWindow::createCameraGroup(int index)
         "software single trigger — set trigger mode 4 first"));
     form->addRow(controls.fire);
 
+    // Digital zoom (set-zoom, GPU crop + upscale). Center crop only; the
+    // protocol's x/y pan stays protocol-only for now.
+    controls.zoom = new QDoubleSpinBox(controls.group);
+    controls.zoom->setRange(1.0, 8.0);
+    controls.zoom->setDecimals(1);
+    controls.zoom->setSingleStep(0.5);
+    controls.zoom->setValue(1.0);  // 1 = full field of view
+    controls.zoom->setSuffix(QStringLiteral("x"));
+    controls.zoom->setProperty("lastSent", 1.0);
+    form->addRow(QStringLiteral("Zoom:"), controls.zoom);
+
     // ISP overrides (set-isp, argus source only — the server rejects the
     // whole group for v4l2/test). Same conventions as above: combos send on
     // user activation, spin boxes on editingFinished with a lastSent guard.
@@ -387,6 +398,8 @@ QWidget *MainWindow::createCameraGroup(int index)
 
     connect(controls.fire, &QPushButton::clicked, this,
             [this, index]() { fireTrigger(index); });
+    connect(controls.zoom, &QDoubleSpinBox::editingFinished, this,
+            [this, index]() { applyZoom(index); });
     connect(controls.exposure, &QSpinBox::editingFinished, this,
             [this, index]() { applyExposure(index); });
     connect(controls.gain, &QDoubleSpinBox::editingFinished, this,
@@ -401,17 +414,25 @@ QWidget *MainWindow::createCameraGroup(int index)
 
 void MainWindow::connectStreams()
 {
-    for (int i = 0; i < 2; ++i) {
-        Pane &pane = m_panes[i];
-        setStatus(pane, QStringLiteral("connecting…"));
-        pane.player->setSource(streamUrl(i));
-        // Note: Qt 6 uses the FFmpeg media backend; there is no public
-        // low-latency knob on QMediaPlayer. Acceptable for milestone 1.
-        pane.player->play();
-    }
+    for (int i = 0; i < 2; ++i)
+        restartPane(i);
     m_control->connectToDevice(controlHost(), kControlPort);
     m_connected = true;
     m_connectButton->setText(QStringLiteral("Disconnect"));
+}
+
+void MainWindow::restartPane(int index)
+{
+    Pane &pane = m_panes[index];
+    setStatus(pane, QStringLiteral("connecting…"));
+    pane.player->stop();
+    // Reset first: setSource() with the current URL is a no-op in Qt 6,
+    // but a zoom change needs a genuinely new RTSP session.
+    pane.player->setSource(QUrl());
+    pane.player->setSource(streamUrl(index));
+    // Note: Qt 6 uses the FFmpeg media backend; there is no public
+    // low-latency knob on QMediaPlayer. Acceptable for milestone 1.
+    pane.player->play();
 }
 
 void MainWindow::disconnectStreams()
@@ -487,12 +508,13 @@ void MainWindow::pollStatus()
                 if (index < 0 || index > 1)
                     continue;
 
+                QString line;
                 if (camera.value(QStringLiteral("streaming")).toBool()) {
                     const qint64 frames = static_cast<qint64>(
                         camera.value(QStringLiteral("frames")).toDouble());
-                    QString line = QStringLiteral("cam%1: streaming, %2 frames")
-                                       .arg(index)
-                                       .arg(frames);
+                    line = QStringLiteral("cam%1: streaming, %2 frames")
+                               .arg(index)
+                               .arg(frames);
                     // Optional (present while frames flow): last_frame
                     // metadata — the sequence number is the sync check.
                     const QJsonValue lastFrame =
@@ -504,10 +526,28 @@ void MainWindow::pollStatus()
                                 .toDouble());
                         line += QStringLiteral(", seq %1").arg(sequence);
                     }
-                    lines << line;
                 } else {
-                    lines << QStringLiteral("cam%1: idle").arg(index);
+                    line = QStringLiteral("cam%1: idle").arg(index);
                 }
+
+                // Optional: what Argus AE programmed into the sensor right
+                // now — exposure_current (µs) and gain_current (milli-dB).
+                const QJsonValue expCurrent =
+                    camera.value(QStringLiteral("exposure_current"));
+                if (expCurrent.isDouble()) {
+                    const double us = expCurrent.toDouble();
+                    line += us < 1000.0
+                        ? QStringLiteral(", exp %1 µs").arg(qRound(us))
+                        : QStringLiteral(", exp %1 ms")
+                              .arg(us / 1000.0, 0, 'f', 1);
+                }
+                const QJsonValue gainCurrent =
+                    camera.value(QStringLiteral("gain_current"));
+                if (gainCurrent.isDouble())
+                    line += QStringLiteral(", gain %1 dB")
+                                .arg(gainCurrent.toDouble() / 1000.0, 0,
+                                     'f', 1);
+                lines << line;
 
                 // Seed the widgets from the first status only — after that
                 // the user owns them; don't fight edits on every poll.
@@ -521,6 +561,10 @@ void MainWindow::pollStatus()
                     controls.exposure->setProperty("lastSent", us);
                     controls.gain->setValue(gain);
                     controls.gain->setProperty("lastSent", gain);
+                    const double zoom =
+                        camera.value(QStringLiteral("zoom")).toDouble(1.0);
+                    controls.zoom->setValue(zoom);
+                    controls.zoom->setProperty("lastSent", zoom);
                     seedIspControls(
                         controls,
                         camera.value(QStringLiteral("isp")).toObject());
@@ -619,6 +663,33 @@ void MainWindow::fireTrigger(int camera)
             if (!error.isEmpty())
                 showRequestError(
                     QStringLiteral("cam%1 fire-trigger").arg(camera), error);
+        });
+}
+
+void MainWindow::applyZoom(int camera)
+{
+    QDoubleSpinBox *box = m_cameraControls[camera].zoom;
+    const double factor = box->value();
+    const QVariant lastSent = box->property("lastSent");
+    if (lastSent.isValid() && lastSent.toDouble() == factor)
+        return;
+    box->setProperty("lastSent", factor);
+
+    QJsonObject params;
+    params.insert(QStringLiteral("camera"), camera);
+    params.insert(QStringLiteral("factor"), factor);
+    m_control->sendRequest(
+        QStringLiteral("set-zoom"), params,
+        [this, camera](const QJsonObject &, const QJsonObject &error) {
+            if (!error.isEmpty()) {
+                showRequestError(QStringLiteral("cam%1 set-zoom").arg(camera),
+                                 error);
+                return;
+            }
+            // Zoom reliably applies to new RTSP sessions only (the mount's
+            // launch string is re-armed) — reconnect this pane to show it.
+            if (m_connected)
+                restartPane(camera);
         });
 }
 

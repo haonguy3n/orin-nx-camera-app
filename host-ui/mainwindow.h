@@ -42,6 +42,7 @@ private:
         QDoubleSpinBox *gain = nullptr;
         QComboBox *trigger = nullptr;
         QPushButton *fire = nullptr;
+        QDoubleSpinBox *zoom = nullptr;
         // ISP overrides (argus source only, PROTOCOL.md set-isp).
         QComboBox *wbMode = nullptr;
         QDoubleSpinBox *saturation = nullptr;
@@ -57,6 +58,7 @@ private:
     QWidget *createCameraGroup(int index);
     void connectStreams();
     void disconnectStreams();
+    void restartPane(int index);
     void setStatus(Pane &pane, const QString &text);
     QUrl streamUrl(int index) const;
     QString controlHost() const;
@@ -67,6 +69,7 @@ private:
     void applyTrigger(int camera, int item);
     void applySync(bool enabled);
     void fireTrigger(int camera);
+    void applyZoom(int camera);
     void applyIsp(int camera, const QString &param, const QJsonValue &value);
     void applyIspCombo(int camera, const QString &param, int item);
     void applyIspSpin(int camera, const QString &param, QDoubleSpinBox *box);

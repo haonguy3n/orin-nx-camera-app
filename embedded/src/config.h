@@ -28,6 +28,12 @@ struct CameraConfig {
     // value, appended to the launch string and settable live via set-isp.
     // Config file: isp-<property>= keys, e.g. isp-wbmode=1.
     std::map<std::string, std::string> isp;
+
+    // Digital zoom: GPU crop+upscale via nvvidconv. 1.0 = full FoV (no
+    // converter in the pipeline); zoom_x/zoom_y = crop center (0..1).
+    double zoom = 1.0;
+    double zoom_x = 0.5;
+    double zoom_y = 0.5;
 };
 
 struct Config {

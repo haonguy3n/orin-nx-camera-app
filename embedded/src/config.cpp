@@ -136,6 +136,14 @@ Config load_config(const std::string& path) {
         cam.exposure = get_int(kf, group, "exposure", cam.exposure);
         cam.gain = get_double(kf, group, "gain", cam.gain);
         cam.trigger = get_int(kf, group, "trigger", cam.trigger);
+        cam.zoom = get_double(kf, group, "zoom", cam.zoom);
+        if (cam.zoom < 1.0 || cam.zoom > 8.0) {
+            g_warning("config: [%s] zoom %g out of range 1-8 (using 1)",
+                      group, cam.zoom);
+            cam.zoom = 1.0;
+        }
+        cam.zoom_x = CLAMP(get_double(kf, group, "zoom-x", cam.zoom_x), 0.0, 1.0);
+        cam.zoom_y = CLAMP(get_double(kf, group, "zoom-y", cam.zoom_y), 0.0, 1.0);
 
         // isp-<property> keys become nvarguscamerasrc property overrides
         // (validated against the whitelist where set-isp is served too).

@@ -52,6 +52,34 @@ std::string nvenc_tail(const CameraConfig& cam) {
     return s;
 }
 
+// Crop rectangle for digital zoom. nvvidconv's left/right/top/bottom are
+// coordinates of the crop rectangle on its input; even values keep NV12
+// chroma alignment. Empty at zoom 1 (converter not inserted at all).
+std::string zoom_crop(const CameraConfig& cam) {
+    if (cam.zoom <= 1.0)
+        return "";
+    const int cw = MAX(2, static_cast<int>(cam.width / cam.zoom) & ~1);
+    const int ch = MAX(2, static_cast<int>(cam.height / cam.zoom) & ~1);
+    int left = static_cast<int>(cam.zoom_x * cam.width - cw / 2.0) & ~1;
+    int top = static_cast<int>(cam.zoom_y * cam.height - ch / 2.0) & ~1;
+    left = CLAMP(left, 0, cam.width - cw);
+    top = CLAMP(top, 0, cam.height - ch);
+    return " left=" + std::to_string(left) +
+           " right=" + std::to_string(left + cw) +
+           " top=" + std::to_string(top) +
+           " bottom=" + std::to_string(top + ch);
+}
+
+// Converter stage: crops (when zoomed) and scales back to the full output
+// size on the GPU. The v4l2 path always needs the conversion into NVMM;
+// argus only gets one when zooming.
+std::string zoom_tail(const CameraConfig& cam) {
+    return " ! nvvidconv name=zoomer" + zoom_crop(cam) +
+           " ! video/x-raw(memory:NVMM),format=NV12,width=" +
+           std::to_string(cam.width) + ",height=" +
+           std::to_string(cam.height);
+}
+
 std::string caps_tail(const CameraConfig& cam) {
     return "width=" + std::to_string(cam.width) +
            ",height=" + std::to_string(cam.height) +
@@ -66,18 +94,19 @@ std::string build_launch(const CameraConfig& cam) {
     if (cam.source == "argus") {
         p += "nvarguscamerasrc name=camsrc sensor-id=" +
              std::to_string(cam.sensor_id) + argus_ranges(cam) +
-             " ! video/x-raw(memory:NVMM)," + caps_tail(cam) + " ! " +
-             nvenc_tail(cam);
+             " ! video/x-raw(memory:NVMM)," + caps_tail(cam);
+        if (cam.zoom > 1.0)
+            p += zoom_tail(cam);
+        p += " ! " + nvenc_tail(cam);
     } else if (cam.source == "v4l2") {
         // GRAY8 explicitly: the mono IMX296's native 10-bit grey (Y10) has
         // no v4l2src mapping, so an unconstrained video/x-raw fails caps
         // negotiation (mount answers 503). The VC driver also serves 8-bit
         // grey, which v4l2src and nvvidconv both handle; nvvidconv converts
-        // into NVMM NV12 for the encoder.
+        // into NVMM NV12 for the encoder (and crops when zoomed).
         p += "v4l2src name=camsrc device=" + cam.device +
              " ! video/x-raw,format=GRAY8," + caps_tail(cam) +
-             " ! nvvidconv ! video/x-raw(memory:NVMM),format=NV12 ! " +
-             nvenc_tail(cam);
+             zoom_tail(cam) + " ! " + nvenc_tail(cam);
     } else {  // test: software pipeline, runs on any host (CI / development).
         const bool h265 = cam.codec == "h265";
         p += "videotestsrc name=camsrc is-live=true ! video/x-raw," +

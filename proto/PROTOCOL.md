@@ -82,6 +82,11 @@ No params. → snapshot of the whole service:
   pipeline per mount).
 - `frames`: buffers through the payloader since the pipeline was created —
   the host can watch this advance as a health signal.
+- `exposure_current` (µs) / `gain_current` (VC driver units, milli-dB):
+  the values programmed into the sensor *right now*, read from its V4L2
+  controls — when the configured `exposure`/`gain` are `0` (auto), these
+  are what Argus's AE loop chose this instant. Omitted when the device
+  node can't be queried.
 - While frames are flowing, each camera also carries a `last_frame` object —
   frame metadata sampled at the payloader (M3):
 
@@ -172,6 +177,25 @@ values are rejected by the element, not by this API.
 Note: `set-isp` adjusts Argus's runtime processing. The static tuning
 (lens shading, CCM, gamma) lives in `camera_overrides.isp` on the device —
 see `yocto/meta-vc-camera/recipes-bsp/isp-tuning/`.
+
+### `set-zoom`
+
+`{"camera": 0|1, "factor": <1.0–8.0>, "x": <0–1>, "y": <0–1>}` → `{}`
+
+Digital zoom: GPU crop + upscale (`nvvidconv`) between the sensor and the
+encoder. `factor` 1.0 = full field of view (the converter is dropped from
+the pipeline entirely); 2.0 = center half of the frame upscaled to full
+resolution, and so on. `x`/`y` (optional, default 0.5/0.5) place the crop
+center as a fraction of the frame — i.e. pan while zoomed. Detail beyond
+the sensor's native pixels is not created: 2× zoom halves the effective
+resolution.
+
+Applies to the live pipeline where the converter supports it, and is
+re-armed into the mount's launch string — a client that reconnects always
+gets the new framing. The UI reconnects its pane on change for exactly
+that reason. Zoom state appears as `zoom`/`zoom_x`/`zoom_y` in
+`get-status`/`get-config`, and can be preset from the config file
+(`zoom=2.0`, `zoom-x=0.5`, `zoom-y=0.5`).
 
 ### `set-sync`
 

@@ -161,6 +161,12 @@ void add_camera_config(JsonBuilder* b, int index, const CameraConfig& cam) {
         json_builder_add_string_value(b, value.c_str());
     }
     json_builder_end_object(b);
+    json_builder_set_member_name(b, "zoom");
+    json_builder_add_double_value(b, cam.zoom);
+    json_builder_set_member_name(b, "zoom_x");
+    json_builder_add_double_value(b, cam.zoom_x);
+    json_builder_set_member_name(b, "zoom_y");
+    json_builder_add_double_value(b, cam.zoom_y);
 }
 
 void add_v4l2_control(JsonBuilder* b, const V4l2Control& c) {
@@ -462,6 +468,22 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
                 json_builder_add_boolean_value(b, s.streaming);
                 json_builder_set_member_name(b, "frames");
                 json_builder_add_int_value(b, s.frames);
+                // Live values programmed into the sensor right now — when
+                // exposure/gain are 0 (auto), this is what Argus AE chose.
+                // Read from the driver's V4L2 controls; omitted if the
+                // device node can't be queried.
+                V4l2Control live;
+                std::string lerr;
+                if (v4l2_get_control(cfg.cameras[i].device, "exposure",
+                                     &live, &lerr)) {
+                    json_builder_set_member_name(b, "exposure_current");
+                    json_builder_add_int_value(b, live.value);
+                }
+                if (v4l2_get_control(cfg.cameras[i].device, "gain", &live,
+                                     &lerr)) {
+                    json_builder_set_member_name(b, "gain_current");
+                    json_builder_add_int_value(b, live.value);
+                }
                 if (s.frames > 0) {
                     json_builder_set_member_name(b, "last_frame");
                     json_builder_begin_object(b);
@@ -626,6 +648,30 @@ JsonNode* ControlServer::dispatch(const char* method, JsonObject* params,
         }
         g_message("control: cam%d isp %s = %s", cam_idx, name.c_str(),
                   value.c_str());
+        return empty_result();
+    }
+
+    if (m == "set-zoom") {
+        int cam_idx;
+        double factor;
+        if (!param_camera(params, &cam_idx))
+            return invalid("camera must be 0 or 1");
+        if (!param_double(params, "factor", &factor) || factor < 1.0 ||
+            factor > 8.0)
+            return invalid("factor must be a number in 1.0-8.0");
+        CameraConfig& cam = cfg.cameras[cam_idx];
+        double v;
+        if (param_double(params, "x", &v))
+            cam.zoom_x = CLAMP(v, 0.0, 1.0);
+        if (param_double(params, "y", &v))
+            cam.zoom_y = CLAMP(v, 0.0, 1.0);
+        cam.zoom = factor;
+        // The re-armed launch string is authoritative (clients reconnect to
+        // pick it up); there is no reliable live crop update on nvvidconv.
+        if (rtsp != nullptr)
+            rtsp->refresh_launch(cam_idx);
+        g_message("control: cam%d zoom = %.2fx @ (%.2f, %.2f)", cam_idx,
+                  cam.zoom, cam.zoom_x, cam.zoom_y);
         return empty_result();
     }
 
