@@ -282,7 +282,7 @@ Design notes:
 
 ## 6. Milestones
 
-**M1 — video stream on host (this milestone)**
+**M1 — video stream on host** ✅ *verified on hardware 2026-07-12*
 1. `meta-vc-camera` added to `orin-nx.yml`; `camera-image` builds & boots (no camera
    bits yet — pure plumbing checkpoint).
 2. VC driver + dual-IMX296 DT patches in `linux-tegra` bbappend → `/dev/video0`/`1`
@@ -291,9 +291,10 @@ Design notes:
 4. `camera-streamer` v0: RTSP server, one camera, H.265 60 fps; host plays it with
    `ffplay rtsp://192.168.55.1:8554/cam0` (no UI needed to close M1).
 
-**M2 — dual streams + host UI** *(implemented, pending on-target verification)*:
-second camera concurrently, Qt UI dual view + control panel, JSON/TCP control
-channel (exposure/gain/trigger, status, reload), pipeline stall watchdog.
+**M2 — dual streams + host UI** ✅ *verified on hardware 2026-07-12*: dual
+concurrent 1440×1080@60 H.265 streams, Qt UI dual view + control panel,
+JSON/TCP control channel (exposure/gain/trigger/ISP/zoom, status with live AE
+readback, reload), pipeline stall watchdog, OTA updates via swupdate (A/B).
 
 **M3 — productization**: hardware-triggered sync capture, frame metadata (timestamp,
 sequence), device discovery, OTA (RAUC/Mender on meta-tegra), factory flash flow.
@@ -314,7 +315,8 @@ trigger wiring, OTA, factory flash flow.
 | Risk | Mitigation |
 |---|---|
 | Exact L4T minor (35.6.0 vs .1/.2) vs VC patch set | Check `L4T_VERSION` in the build; diff-review VC patches against the actual kernel tree; pin the pair in the layer. |
-| Color IMX296C image quality via Argus (ISP tuning) | Runtime ISP controls shipped (`set-isp`: WB/saturation/TNR/EE/AE, host-UI ISP group); static tuning deploys via the `vc-isp-tuning` recipe once VC's `camera_overrides.isp` is obtained (see `recipes-bsp/isp-tuning/README.md`). Mono modules bypass the issue via the V4L2 path. |
+| Color IMX296C image quality via Argus (ISP tuning) | *Partly resolved on target*: the pink haze was the unsubtracted 60-LSB sensor pedestal — a measured black-level `camera_overrides.isp` now ships via `vc-isp-tuning`. Runtime ISP controls shipped (`set-isp`). Remaining: WB/CCM calibration with a ColorChecker (`tools/isp-tuning/`), and check the lens for an IR-cut filter before daylight use. |
+| Host networks that drop unsolicited inbound UDP (observed: no RTP received while the server sent perfectly) | RTSP serves TCP-interleaved by default (`[server] transport`); clients negotiate it automatically. |
 | USB2-only device mode (~350 Mbit/s) | HW encode on device (designed in). If the host ever needs raw frames, use GigE or reduced fps/ROI. |
 | DTB is flashed on JP5 → slow DT iteration | Script the DTB-only reflash path during bring-up. |
 | Future JP6 migration changes integration model (nvidia-oot + .dtbo overlays) | Isolated in `meta-vc-camera` (one bbappend + DT recipe swap); app and gadget layers unaffected. |

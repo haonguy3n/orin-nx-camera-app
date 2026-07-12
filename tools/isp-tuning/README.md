@@ -1,5 +1,19 @@
 # DIY ISP calibration for the IMX296C (no NVIDIA tuning tools)
 
+> **Status (2026-07-12)**: the black-level step is done and shipped — the
+> IMX296's 60-LSB pedestal, unsubtracted by the default tuning, rendered as
+> a pink haze over the whole image; the fix lives in
+> `yocto/meta-vc-camera/recipes-bsp/isp-tuning/files/camera_overrides.isp`
+> and is installed by `camera-image`. Remaining: WB/CCM with a ColorChecker
+> (greenish tint left), and an IR-cut filter check on the lens.
+>
+> **Caveat**: raw `v4l2-ctl` capture currently stalls on this build (the
+> sensor delivers no frames on the pure-V4L2 path — same root cause as the
+> M3 trigger-capture item in DESIGN.md). Until that's fixed, calibrate from
+> Argus-path captures (`ffmpeg -rtsp_transport tcp -i rtsp://… frame.png`)
+> — fine for CCM/WB since the black level is now correct, just disable
+> runtime ISP overrides (`set-isp` … `null`) while measuring.
+
 VC did not provide a `camera_overrides.isp` for our modules, and NVIDIA's
 official tuning suite is partner/NDA-only. This directory is the
 do-it-yourself route: the overrides file is **plain text** and its key

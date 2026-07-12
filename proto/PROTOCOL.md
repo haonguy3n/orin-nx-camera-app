@@ -185,8 +185,9 @@ see `yocto/meta-vc-camera/recipes-bsp/isp-tuning/`.
 Digital zoom: GPU crop + upscale (`nvvidconv`) between the sensor and the
 encoder. `factor` 1.0 = full field of view (the converter is dropped from
 the pipeline entirely); 2.0 = center half of the frame upscaled to full
-resolution, and so on. `x`/`y` (optional, default 0.5/0.5) place the crop
-center as a fraction of the frame — i.e. pan while zoomed. Detail beyond
+resolution, and so on. `x`/`y` place the crop center as a fraction of the
+frame — i.e. pan while zoomed; omitted they stay unchanged (initially
+0.5/0.5, centered). Detail beyond
 the sensor's native pixels is not created: 2× zoom halves the effective
 resolution.
 

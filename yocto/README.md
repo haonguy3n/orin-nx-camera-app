@@ -9,11 +9,13 @@ L4T r35.6.4 / JetPack 5, machine `p3768-0000-p3767-0000`, distro `tegrademo`).
 
 ```sh
 cd ~/Projects/orin-nx
-yb build camera-image        # positional target overrides the yml's default
+yb build orin-nx.yml
 ```
 
-The yml's default `target:` is still `demo-image-base`, so a plain `yb build`
-keeps building the stock image.
+The yml's targets are `demo-image-base` and `swupdate-image-tegra`;
+`camera-image` is pulled in through `SWUPDATE_CORE_IMAGE_NAME = "camera-image"`
+(the `.swu` update package wraps it), so one build produces both the
+tegraflash artifacts for the initial flash and the OTA package.
 
 ## How the layer is hooked in
 
@@ -47,9 +49,14 @@ repo with `layers: yocto/meta-vc-camera:` and the symlink can go away.
 - `recipes-images/camera-image.bb` — `demo-image-base` + NVIDIA GStreamer
   elements (`gstreamer1.0-plugins-nvarguscamerasrc/-nvvidconv/
   -nvvideo4linux2/-nvvideosinks`), `gstreamer1.0-rtsp-server`, `v4l-utils`,
-  `dnsmasq`, `usb-gadget-init`, `camera-streamer`.
-- `recipes-kernel/` — VC MIPI driver + device-tree integration (separate
-  workstream; see DESIGN.md 2.3/2.4).
+  `dnsmasq`, `usb-gadget-init`, `camera-streamer`, `vc-isp-tuning`.
+- `recipes-bsp/isp-tuning/` — installs `camera_overrides.isp` for libargus
+  (currently the measured IMX296C black-level fix; see the README there).
+- `recipes-bsp/uefi/` — bbappends fixing the EDK2 BaseTools build on modern
+  host GCC (≥15).
+- `recipes-kernel/` — VC MIPI driver + device-tree integration (see
+  DESIGN.md 2.3/2.4), including the Argus sensor-geometry values and the
+  serialized dtb-overlays compile.
 
 ## Flashing
 
@@ -69,6 +76,21 @@ See meta-tegra's scarthgap docs for details/variants:
 <https://github.com/OE4T/meta-tegra/wiki/Flashing-the-Jetson-Dev-Kit>.
 Note (DESIGN.md 2.4): on JP5/L4T r35 the DTB is flashed, so device-tree
 changes need a reflash (or a DTB-partition update), not just a rootfs swap.
+
+## OTA updates (swupdate, A/B rootfs)
+
+After the initial flash (redundant layout: `USE_REDUNDANT_FLASH_LAYOUT=1`),
+subsequent updates go over the network — kernel, DTB and rootfs land in the
+inactive slot and the boot slot flips on success:
+
+```sh
+cd ~/Projects/orin-nx/build/tmp/deploy/images/p3768-0000-p3767-0000
+scp camera-image-p3768-0000-p3767-0000.swu root@192.168.55.1:/tmp/
+ssh root@192.168.55.1 'swupdate -i /tmp/camera-image-*.swu && reboot'
+```
+
+Each rootfs slot has its own ssh host keys — expect a host-key warning
+after every slot switch.
 
 ## USB gadget — what the host sees
 

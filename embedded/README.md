@@ -59,6 +59,8 @@ ships in `config/camera-streamer.conf`. All keys:
 | | `gain` | `0` | `0` = auto/default; argus: analog gain multiplier, v4l2: raw VC driver units (milli-dB, 0–48000 = 0–48 dB) |
 | | `trigger` | `-1` | VC hardware trigger mode 0–7, v4l2 source only; `-1` = leave driver default |
 | | `isp-<property>` | — | argus only: preset an nvarguscamerasrc ISP property (`isp-wbmode=1`, `isp-saturation=1.2`, …); same whitelist as the protocol's `set-isp` |
+| | `zoom` | `1.0` | digital zoom 1–8× (GPU crop + upscale; 1.0 = converter not in the pipeline) |
+| | `zoom-x` / `zoom-y` | `0.5` | crop center as a fraction of the frame (pan while zoomed) |
 
 The final GStreamer launch string for every mount is logged at startup —
 useful for reproducing issues with plain `gst-launch-1.0`.
@@ -66,14 +68,15 @@ useful for reproducing issues with plain `gst-launch-1.0`.
 ## Control protocol (M2)
 
 `../proto/PROTOCOL.md` defines the newline-delimited JSON protocol on port
-8555: `get-status` (per-camera streaming state, frame counters and
-`last_frame` capture metadata for cross-camera sync checks),
-`set-exposure` / `set-gain` / `set-trigger`, `set-sync` (all cameras to
-external trigger) / `fire-trigger` (software single trigger), generic
-`list-controls`/`get-control`/`set-control` for everything else the VC
-driver exposes, and `reload`. A UDP responder on port 8556 answers
-`{"method":"discover"}` broadcasts so the host UI can find devices. The TCP
-side is plain enough to drive by hand:
+8555: `get-status` (per-camera streaming state, frame counters, live AE
+exposure/gain readback, and `last_frame` capture metadata for cross-camera
+sync checks), `set-exposure` / `set-gain` / `set-trigger`, `set-isp`
+(runtime WB/saturation/TNR/EE), `set-zoom` (digital zoom + pan), `set-sync`
+(all cameras to external trigger) / `fire-trigger` (software single
+trigger), generic `list-controls`/`get-control`/`set-control` for
+everything else the VC driver exposes, and `reload`. A UDP responder on
+port 8556 answers `{"method":"discover"}` broadcasts so the host UI can
+find devices. The TCP side is plain enough to drive by hand:
 
 ```sh
 printf '{"id":1,"method":"set-exposure","params":{"camera":0,"us":5000}}\n' \
@@ -126,16 +129,20 @@ ffplay rtsp://127.0.0.1:8554/cam0
 
 With the device connected over USB (device IP 192.168.55.1):
 
+The server offers TCP-interleaved RTP by default (see `transport=`), and
+every client negotiates that automatically; forcing TCP client-side just
+skips one round-trip:
+
 ```sh
 # simplest
-ffplay rtsp://192.168.55.1:8554/cam0
+ffplay -rtsp_transport tcp rtsp://192.168.55.1:8554/cam0
 
 # GStreamer, automatic pipeline
 gst-launch-1.0 playbin uri=rtsp://192.168.55.1:8554/cam0
 
 # GStreamer, explicit low-latency pipeline (H.265)
-gst-launch-1.0 rtspsrc location=rtsp://192.168.55.1:8554/cam0 latency=100 ! \
-    rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! autovideosink
+gst-launch-1.0 rtspsrc location=rtsp://192.168.55.1:8554/cam0 protocols=tcp \
+    latency=100 ! rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! autovideosink
 ```
 
 Multiple clients can watch the same mount; the media factories are shared, so

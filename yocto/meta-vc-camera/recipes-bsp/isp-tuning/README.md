@@ -1,5 +1,9 @@
 # ISP tuning for the color IMX296C (argus path)
 
+> **Status**: `files/camera_overrides.isp` is present (measured black-level
+> fix for the pink haze) and the recipe is installed by `camera-image`.
+> Extend the same file as calibration progresses.
+
 Jetson ISP tuning has three layers; this recipe covers the middle one.
 
 1. **Runtime controls** — white balance, saturation, TNR/EE, AE
