@@ -256,26 +256,34 @@ bool poll_status(UpdateStatus& out) {
     out.error.clear();
 
     // The status response has:
-    //   data.status.current  — RECOVERY_STATUS enum
-    //   data.status.last_result
-    //   data.status.error    — error code
-    //   data.status.desc     — notification message text (may contain
+    //   data.status.current     — RECOVERY_STATUS enum (overwritten by
+    //                             queued notification if one exists)
+    //   data.status.last_result — result of the last install (persists
+    //                             after swupdate goes back to IDLE)
+    //   data.status.error       — error code
+    //   data.status.desc        — notification message text (may contain
     //                          progress info like "10%" or "Step 2 of 7")
     const int raw_status = msg.data.status.current;
+    const int raw_last_result = msg.data.status.last_result;
     const char* desc = msg.data.status.desc;
 
-    switch (raw_status) {
-    case kStatusIdle:       out.state = UpdateState::Idle; break;
-    case kStatusStart:      out.state = UpdateState::Installing; break;
-    case kStatusRun:        out.state = UpdateState::Installing; break;
-    case kStatusSuccess:    out.state = UpdateState::Success; break;
-    case kStatusFailure:    out.state = UpdateState::Failure; break;
-    case kStatusDownload:   out.state = UpdateState::Installing; break;
-    case kStatusDone:       out.state = UpdateState::Done; break;
-    case kStatusSubprocess: out.state = UpdateState::Installing; break;
-    case kStatusProgress:   out.state = UpdateState::Installing; break;
-    default:               out.state = UpdateState::Installing; break;
-    }
+    auto to_state = [](int s) -> UpdateState {
+        switch (s) {
+        case kStatusIdle:       return UpdateState::Idle;
+        case kStatusStart:      return UpdateState::Installing;
+        case kStatusRun:        return UpdateState::Installing;
+        case kStatusSuccess:    return UpdateState::Success;
+        case kStatusFailure:    return UpdateState::Failure;
+        case kStatusDownload:   return UpdateState::Installing;
+        case kStatusDone:       return UpdateState::Done;
+        case kStatusSubprocess: return UpdateState::Installing;
+        case kStatusProgress:   return UpdateState::Installing;
+        default:               return UpdateState::Installing;
+        }
+    };
+
+    out.state = to_state(raw_status);
+    out.last_result = to_state(raw_last_result);
 
     // Parse progress percentage from the desc text.
     // swupdate sends PROGRESS notifications with text like "10%" or
@@ -309,8 +317,9 @@ bool poll_status(UpdateStatus& out) {
     if (msg.data.status.error != 0)
         out.error = desc;
 
-    g_message("swupdate: status: raw=%d state=%d percent=%d desc=%.80s",
-              raw_status, static_cast<int>(out.state), out.percent,
+    g_message("swupdate: status: raw=%d state=%d last_result=%d percent=%d desc=%.80s",
+              raw_status, static_cast<int>(out.state),
+              static_cast<int>(out.last_result), out.percent,
               desc[0] ? desc : "(empty)");
     return true;
 }
@@ -485,11 +494,23 @@ void SwupdateClient::poll_completion() {
             }
 
             // If swupdate goes back to IDLE after we started an install,
-            // it means the install finished but we missed the SUCCESS/DONE
-            // notification. Treat it as success if last_result was success.
+            // the install has finished. Check last_result to determine
+            // success or failure. swupdate sets last_result before going
+            // IDLE, and it persists. This is the reliable way to detect
+            // completion — the SUCCESS/DONE state may be transient and
+            // missed if we're draining the notification queue.
             if (s.state == UpdateState::Idle) {
-                g_message("swupdate: daemon idle after install, assuming done");
-                set_state(UpdateState::Success);
+                if (s.last_result == UpdateState::Failure) {
+                    g_critical("swupdate: installation failed: %s",
+                              s.error.c_str());
+                    set_error(s.error);
+                    set_state(UpdateState::Failure);
+                } else {
+                    g_message("swupdate: daemon idle after install, "
+                              "last_result=%d — assuming success",
+                              static_cast<int>(s.last_result));
+                    set_state(UpdateState::Success);
+                }
                 return;
             }
         }

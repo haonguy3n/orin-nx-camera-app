@@ -32,6 +32,7 @@ enum class UpdateState {
 /// Progress information for a running update.
 struct UpdateStatus {
     UpdateState state = UpdateState::Idle;
+    UpdateState last_result = UpdateState::Idle;  ///< Result of last install (persists after IDLE)
     int percent = 0;            ///< 0-100, current step progress
     int step = 0;               ///< Current step number (1-based)
     int total_steps = 0;        ///< Total number of steps in this update
