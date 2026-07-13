@@ -12,6 +12,7 @@
 
 #include <cerrno>
 #include <cctype>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -29,6 +30,16 @@ const char* kSwupdateSocketPaths[] = {
 /// Number of socket paths to try.
 constexpr int kNumSocketPaths =
     sizeof(kSwupdateSocketPaths) / sizeof(kSwupdateSocketPaths[0]);
+
+/// Progress socket paths (separate from control socket).
+/// The progress socket runs in its own thread and pushes progress updates
+/// to connected clients — it's never blocked by the install process.
+const char* kProgressSocketPaths[] = {
+    "/run/swupdate/progress.sock",  // systemd socket activation
+    "/tmp/swupdateprog",            // legacy default
+};
+constexpr int kNumProgressSocketPaths =
+    sizeof(kProgressSocketPaths) / sizeof(kProgressSocketPaths[0]);
 
 /// swupdate API version (from network_ipc.h: SWUPDATE_API_VERSION).
 constexpr unsigned int kSwupdateApiVersion = 0x1;
@@ -56,6 +67,31 @@ enum RecoveryStatus {
     kStatusSubprocess = 7,
     kStatusProgress = 8,
 };
+
+/// Progress socket ACK (from progress_ipc.h).
+/// Sent by swupdate when a client connects to the progress socket.
+struct progress_connect_ack {
+    uint32_t apiversion;
+    char magic[4];  // "ACK"
+};
+
+/// Progress message (from progress_ipc.h).
+/// Pushed by swupdate to all connected progress clients whenever
+/// installation progress changes. Packed struct — no padding.
+struct progress_msg {
+    uint32_t apiversion;
+    uint32_t status;           // RECOVERY_STATUS enum
+    uint32_t dwl_percent;      // download percent
+    unsigned long long dwl_bytes;
+    uint32_t nsteps;           // total number of steps
+    uint32_t cur_step;         // current step (1-based after first inc)
+    uint32_t cur_percent;      // percent within current step (0-100)
+    char cur_image[256];       // name of image being installed
+    char hnd_name[64];         // handler name
+    uint32_t source;           // interface that triggered the update
+    uint32_t infolen;          // length of info field
+    char info[2048];           // additional info
+} __attribute__((packed));
 
 /// swupdate_request (from network_ipc.h, part of the instmsg union member).
 /// We define this locally to get the correct union size without depending
@@ -456,15 +492,193 @@ void SwupdateClient::run_install(const std::string& path) {
 }
 
 void SwupdateClient::poll_completion() {
-    UpdateState last_logged_state = UpdateState::Idle;
-    int last_logged_percent = -1;
+    // Connect to the progress socket. This is a separate thread in swupdate
+    // that pushes progress_msg updates to connected clients. Unlike GET_STATUS
+    // on the control socket (which blocks during CPIO streaming), the progress
+    // socket is always responsive.
+    int fd = -1;
+    for (int i = 0; i < kNumProgressSocketPaths; ++i) {
+        fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0)
+            continue;
 
-    // Poll for completion (10 min timeout). Note: swupdate processes the
-    // CPIO stream as it arrives, so installation runs CONCURRENTLY with
-    // upload. This poll thread starts immediately after REQ_INSTALL ACK,
-    // while the upload thread is still streaming data. The state
-    // transitions from Uploading → Installing as soon as swupdate reports
-    // START/RUN/PROGRESS, even while upload is ongoing.
+        struct sockaddr_un addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, kProgressSocketPaths[i],
+                sizeof(addr.sun_path) - 1);
+
+        if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
+                    sizeof(addr)) < 0) {
+            close(fd);
+            fd = -1;
+            continue;
+        }
+        g_message("swupdate: connected to progress socket %s (fd=%d)",
+                  kProgressSocketPaths[i], fd);
+        break;
+    }
+    if (fd < 0) {
+        g_critical("swupdate: cannot connect to progress socket, "
+                   "falling back to GET_STATUS polling");
+        poll_completion_via_control_socket();
+        return;
+    }
+
+    // Read the connect ACK (8 bytes: uint32 apiversion + char[4] magic)
+    progress_connect_ack ack;
+    if (!read_all(fd, &ack, sizeof(ack))) {
+        g_critical("swupdate: failed to read progress ACK");
+        close(fd);
+        set_error("progress socket connect failed");
+        set_state(UpdateState::Failure);
+        return;
+    }
+    g_message("swupdate: progress ACK received, apiversion=0x%x magic=%.3s",
+              ack.apiversion, ack.magic);
+
+    // Loop: receive progress_msg updates until completion or timeout.
+    // The progress socket pushes updates automatically — no polling needed.
+    // Use select() with a timeout so we don't block forever if swupdate
+    // crashes or hangs.
+    bool saw_start = false;
+    for (int idle_count = 0; idle_count < 600; ++idle_count) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(fd, &fds);
+        struct timeval tv;
+        tv.tv_sec = 60;  // 60s timeout between messages
+        tv.tv_usec = 0;
+
+        int ret = select(fd + 1, &fds, nullptr, nullptr, &tv);
+        if (ret < 0) {
+            if (errno == EINTR)
+                continue;
+            g_critical("swupdate: progress select(): %s", strerror(errno));
+            break;
+        }
+        if (ret == 0) {
+            // No message in 60 seconds. If we've seen START, the install
+            // may have finished without sending a terminal status (e.g.
+            // swupdate exited). Check via GET_STATUS as a fallback.
+            if (saw_start) {
+                g_message("swupdate: progress timeout, checking status");
+                UpdateStatus s;
+                if (poll_status(s)) {
+                    if (s.state == UpdateState::Success ||
+                        s.state == UpdateState::Done ||
+                        (s.state == UpdateState::Idle &&
+                         s.last_result != UpdateState::Failure)) {
+                        g_message("swupdate: installation successful (via fallback)");
+                        set_state(UpdateState::Success);
+                        close(fd);
+                        return;
+                    }
+                    if (s.state == UpdateState::Failure ||
+                        (s.state == UpdateState::Idle &&
+                         s.last_result == UpdateState::Failure)) {
+                        g_critical("swupdate: installation failed (via fallback)");
+                        set_error(s.error);
+                        set_state(UpdateState::Failure);
+                        close(fd);
+                        return;
+                    }
+                }
+            }
+            continue;
+        }
+
+        progress_msg msg;
+        if (!read_all(fd, &msg, sizeof(msg))) {
+            // Connection closed by swupdate — install likely finished.
+            // Check final status via control socket.
+            g_message("swupdate: progress socket closed, checking final status");
+            if (saw_start) {
+                UpdateStatus s;
+                if (poll_status(s)) {
+                    if (s.last_result == UpdateState::Failure) {
+                        set_error(s.error);
+                        set_state(UpdateState::Failure);
+                        close(fd);
+                        return;
+                    }
+                }
+                set_state(UpdateState::Success);
+            }
+            close(fd);
+            return;
+        }
+
+        // Update atomic state from progress message
+        percent_.store(msg.cur_percent);
+        step_.store(msg.cur_step);
+        total_steps_.store(msg.nsteps);
+        if (msg.cur_image[0] != '\0')
+            current_name_ = msg.cur_image;
+
+        // Map status to UpdateState
+        UpdateState new_state = UpdateState::Installing;
+        switch (msg.status) {
+        case kStatusIdle:
+            new_state = UpdateState::Idle;
+            break;
+        case kStatusStart:
+            new_state = UpdateState::Installing;
+            saw_start = true;
+            break;
+        case kStatusRun:
+        case kStatusProgress:
+        case kStatusDownload:
+        case kStatusSubprocess:
+            new_state = UpdateState::Installing;
+            saw_start = true;
+            break;
+        case kStatusSuccess:
+            g_message("swupdate: installation successful "
+                      "(step %u/%u, %u%%)",
+                      msg.cur_step, msg.nsteps, msg.cur_percent);
+            set_state(UpdateState::Success);
+            close(fd);
+            return;
+        case kStatusFailure:
+            g_critical("swupdate: installation failed");
+            set_error("installation failed");
+            set_state(UpdateState::Failure);
+            close(fd);
+            return;
+        case kStatusDone:
+            g_message("swupdate: installation done");
+            set_state(UpdateState::Success);
+            close(fd);
+            return;
+        }
+
+        // Transition from Uploading to Installing when swupdate starts
+        if (new_state == UpdateState::Installing &&
+            state_.load() == UpdateState::Uploading) {
+            g_message("swupdate: install started (step %u/%u: %s)",
+                      msg.cur_step, msg.nsteps, msg.cur_image);
+            set_state(UpdateState::Installing);
+        }
+
+        g_message("swupdate: progress: status=%u step=%u/%u percent=%u "
+                  "image=%.32s",
+                  msg.status, msg.cur_step, msg.nsteps, msg.cur_percent,
+                  msg.cur_image);
+    }
+
+    g_critical("swupdate: timed out waiting for completion");
+    set_error("timed out waiting for swupdate completion");
+    set_state(UpdateState::Failure);
+    close(fd);
+}
+
+/// Fallback: poll GET_STATUS on the control socket. Used when the progress
+/// socket is not available. Less reliable because the control socket may
+/// be blocked during CPIO streaming.
+void SwupdateClient::poll_completion_via_control_socket() {
+    UpdateState last_logged_state = UpdateState::Idle;
+
     for (int i = 0; i < 600; ++i) {
         UpdateStatus s;
         if (poll_status(s)) {
@@ -473,16 +687,6 @@ void SwupdateClient::poll_completion() {
             total_steps_.store(s.total_steps);
             if (!s.current_name.empty())
                 current_name_ = s.current_name;
-
-            // Log on state change, percent change (every 5%), or every 30s
-            bool state_changed = (s.state != last_logged_state);
-            bool pct_changed = (abs(s.percent - last_logged_percent) >= 5);
-            if (state_changed || pct_changed || (i % 30 == 0)) {
-                if (state_changed)
-                    last_logged_state = s.state;
-                if (pct_changed)
-                    last_logged_percent = s.percent;
-            }
 
             if (s.state == UpdateState::Success ||
                 s.state == UpdateState::Done) {
@@ -498,43 +702,23 @@ void SwupdateClient::poll_completion() {
                 return;
             }
 
-            // If swupdate goes back to IDLE after we started an install,
-            // the install has finished. Check last_result to determine
-            // success or failure. swupdate sets last_result before going
-            // IDLE, and it persists. This is the reliable way to detect
-            // completion — the SUCCESS/DONE state may be transient and
-            // missed if we're draining the notification queue.
             if (s.state == UpdateState::Idle) {
-                // Don't treat IDLE as completion during the first few
-                // seconds — swupdate may not have started processing yet.
-                // Only treat IDLE as completion after we've seen at least
-                // one non-IDLE status, or after 5 seconds.
-                if (i < 5 && last_logged_state == UpdateState::Idle) {
-                    // swupdate hasn't started yet, keep waiting
+                if (i < 5 && last_logged_state == UpdateState::Idle)
                     continue;
-                }
                 if (s.last_result == UpdateState::Failure) {
-                    g_critical("swupdate: installation failed: %s",
-                              s.error.c_str());
                     set_error(s.error);
                     set_state(UpdateState::Failure);
                 } else {
-                    g_message("swupdate: daemon idle after install, "
-                              "last_result=%d — assuming success",
-                              static_cast<int>(s.last_result));
                     set_state(UpdateState::Success);
                 }
                 return;
             }
 
-            // swupdate is actively processing — transition from Uploading
-            // to Installing (even if upload is still ongoing, swupdate
-            // has started parsing the CPIO stream)
             if (s.state == UpdateState::Installing &&
                 state_.load() == UpdateState::Uploading) {
-                g_message("swupdate: install started during upload");
                 set_state(UpdateState::Installing);
             }
+            last_logged_state = s.state;
         }
         sleep(1);
     }

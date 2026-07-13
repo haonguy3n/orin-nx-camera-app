@@ -85,6 +85,7 @@ public:
 private:
     void run_install(const std::string& path);
     void poll_completion();
+    void poll_completion_via_control_socket();  ///< Fallback if progress socket unavailable
     void set_state(UpdateState state);
     void set_error(const std::string& error);
 
