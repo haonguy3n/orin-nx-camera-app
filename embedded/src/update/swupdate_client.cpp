@@ -459,7 +459,12 @@ void SwupdateClient::poll_completion() {
     UpdateState last_logged_state = UpdateState::Idle;
     int last_logged_percent = -1;
 
-    // Poll for completion (10 min timeout)
+    // Poll for completion (10 min timeout). Note: swupdate processes the
+    // CPIO stream as it arrives, so installation runs CONCURRENTLY with
+    // upload. This poll thread starts immediately after REQ_INSTALL ACK,
+    // while the upload thread is still streaming data. The state
+    // transitions from Uploading → Installing as soon as swupdate reports
+    // START/RUN/PROGRESS, even while upload is ongoing.
     for (int i = 0; i < 600; ++i) {
         UpdateStatus s;
         if (poll_status(s)) {
@@ -500,6 +505,14 @@ void SwupdateClient::poll_completion() {
             // completion — the SUCCESS/DONE state may be transient and
             // missed if we're draining the notification queue.
             if (s.state == UpdateState::Idle) {
+                // Don't treat IDLE as completion during the first few
+                // seconds — swupdate may not have started processing yet.
+                // Only treat IDLE as completion after we've seen at least
+                // one non-IDLE status, or after 5 seconds.
+                if (i < 5 && last_logged_state == UpdateState::Idle) {
+                    // swupdate hasn't started yet, keep waiting
+                    continue;
+                }
                 if (s.last_result == UpdateState::Failure) {
                     g_critical("swupdate: installation failed: %s",
                               s.error.c_str());
@@ -512,6 +525,15 @@ void SwupdateClient::poll_completion() {
                     set_state(UpdateState::Success);
                 }
                 return;
+            }
+
+            // swupdate is actively processing — transition from Uploading
+            // to Installing (even if upload is still ongoing, swupdate
+            // has started parsing the CPIO stream)
+            if (s.state == UpdateState::Installing &&
+                state_.load() == UpdateState::Uploading) {
+                g_message("swupdate: install started during upload");
+                set_state(UpdateState::Installing);
             }
         }
         sleep(1);
@@ -542,18 +564,28 @@ int SwupdateClient::begin_stream_install() {
     }
 
     g_message("swupdate: streaming install started (fd=%d)", fd);
-    return fd;
-}
 
-void SwupdateClient::end_stream_install() {
-    g_message("swupdate: stream upload complete, polling installation");
-    set_state(UpdateState::Installing);
-
-    // Detach any previous thread, then start polling in background
+    // Start polling immediately — swupdate processes the CPIO stream as it
+    // arrives, so installation runs concurrently with upload. The poll
+    // thread will transition state from Uploading to Installing when
+    // swupdate starts processing, and detect completion via last_result.
     if (install_thread_.joinable())
         install_thread_.detach();
     install_thread_ = std::thread(&SwupdateClient::poll_completion, this);
     install_thread_.detach();
+
+    return fd;
+}
+
+void SwupdateClient::end_stream_install() {
+    g_message("swupdate: stream upload complete");
+    // Don't force state to Installing — the poll thread may have already
+    // transitioned to Installing (or even Success/Failure) while upload
+    // was ongoing. Only set Installing if we're still in Uploading state.
+    if (state_.load() == UpdateState::Uploading) {
+        set_state(UpdateState::Installing);
+    }
+    // The poll thread is already running and will detect completion.
 }
 
 UpdateStatus SwupdateClient::get_status() const {

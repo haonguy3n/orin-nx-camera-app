@@ -1,15 +1,23 @@
 // SWUpdate IPC client: installs .swu packages via the swupdate daemon.
 //
-// Uses the swupdate IPC API (Unix domain socket at /tmp/sockinstctrl) to
-// stream the update image to swupdate and poll installation status.
+// Uses the swupdate IPC API (Unix domain socket at /run/swupdate/control.sock
+// or /tmp/sockinstctrl) to stream the update image to swupdate and poll
+// installation status.
 // See: https://sbabic.github.io/swupdate/swupdate-ipc-interface.html
 //
 // The swupdate IPC protocol:
-//  1. Client connects to /tmp/sockinstctrl
+//  1. Client connects to the control socket
 //  2. Client sends ipc_message with type=REQ_INSTALL, receives ACK/NACK
 //  3. Client streams the raw .swu image (swupdate detects size from CPIO)
 //  4. Client closes the write side
 //  5. Client polls GET_STATUS for progress until SUCCESS/FAILURE/DONE
+//
+// IMPORTANT: swupdate processes the CPIO stream as it arrives, so
+// installation runs CONCURRENTLY with upload. The poll thread starts
+// immediately after REQ_INSTALL ACK (in begin_stream_install), not
+// after upload completes. The state transitions from Uploading to
+// Installing as soon as swupdate reports START/RUN/PROGRESS, even
+// while the upload thread is still streaming data.
 //
 // This class encapsulates that protocol so the rest of the application
 // only sees install_from_file() + get_status().
