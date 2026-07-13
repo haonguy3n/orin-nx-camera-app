@@ -23,6 +23,10 @@ qt_add_executable(camera-viewer
     discoveryclient.h
     theme.cpp
     theme.h
+    updateclient.cpp
+    updateclient.h
+    updatewidget.cpp
+    updatewidget.h
     videopane.cpp
     videopane.h
     whitebalancecalibrator.cpp

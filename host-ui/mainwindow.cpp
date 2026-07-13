@@ -18,12 +18,15 @@
 #include "controlpanel.h"
 #include "discoveryclient.h"
 #include "theme.h"
+#include "updateclient.h"
+#include "updatewidget.h"
 #include "videopane.h"
 #include "whitebalancecalibrator.h"
 
 namespace {
 
 constexpr quint16 kControlPort = 8555;  // PROTOCOL.md default
+constexpr quint16 kUpdatePort = 8557;   // OTA upload port default
 constexpr int kStatusPollMs = 2000;
 
 } // namespace
@@ -60,6 +63,24 @@ MainWindow::MainWindow(QWidget *parent)
     // Discovery.
     m_discovery = new DiscoveryClient(this);
 
+    // OTA update.
+    m_updateClient = new UpdateClient(this);
+    connect(m_updateClient, &UpdateClient::uploadProgress, this,
+            [this](qint64 sent, qint64 total) {
+                m_controlPanel->updateWidget()->setUploadProgress(sent, total);
+            });
+    connect(m_updateClient, &UpdateClient::uploadFinished, this,
+            [this](const QJsonObject &/*response*/) {
+                m_controlPanel->setError(QString());
+                // Start polling install status immediately
+                pollUpdateStatus();
+            });
+    connect(m_updateClient, &UpdateClient::uploadError, this,
+            [this](const QString &message) {
+                m_controlPanel->setError(
+                    QStringLiteral("update: %1").arg(message));
+            });
+
     setupConnections();
 }
 
@@ -75,10 +96,9 @@ void MainWindow::setupToolbar(QWidget *parent)
         QStringLiteral("Device IP/hostname, or an rtsp://host:port base URL"));
 
     m_cameraSelect = new QComboBox(parent);
-    m_cameraSelect->addItem(QStringLiteral("cam0"));
-    m_cameraSelect->addItem(QStringLiteral("cam1"));
     m_cameraSelect->setToolTip(
         QStringLiteral("switch the video pane between cameras"));
+    // Populated dynamically from get-status / discovery (see populateCameraList)
 
     m_connectButton = new QPushButton(QStringLiteral("Connect"), parent);
     m_connectButton->setObjectName(QStringLiteral("accent"));
@@ -121,8 +141,10 @@ void MainWindow::setupVideoArea(QWidget *parent)
 void MainWindow::setupConnections()
 {
     // Camera selector — switch the visible pane.
-    connect(m_cameraSelect, &QComboBox::activated, this, [this](int index) {
-        m_paneStack->setCurrentIndex(index);
+    connect(m_cameraSelect, &QComboBox::activated, this, [this](int row) {
+        const int camIndex = comboBoxToCameraIndex(row);
+        if (camIndex >= 0 && camIndex < 2)
+            m_paneStack->setCurrentIndex(camIndex);
     });
 
     // Connect / Disconnect toggle.
@@ -155,6 +177,11 @@ void MainWindow::setupConnections()
         m_controlPanel->setDeviceStatus(QString());
         m_controlPanel->setControlsEnabled(false);
         m_statusTimer->stop();
+        // Reset camera list so it re-populates on next connect
+        m_cameraSelect->clear();
+        m_cameraIndices.clear();
+        m_cameraListPopulated = false;
+        m_controlsPopulated = false;
     });
 
     connect(m_control, &ControlClient::errorOccurred, this,
@@ -181,6 +208,15 @@ void MainWindow::setupConnections()
                     QStringLiteral("%1 (%2)").arg(address, version));
                 connect(action, &QAction::triggered, this,
                         [this, address]() { m_hostEdit->setText(address); });
+
+                // Populate camera list from discovery if not already done
+                // (gives the user camera info before connecting).
+                if (!m_cameraListPopulated) {
+                    const QJsonArray cameras =
+                        info.value(QStringLiteral("cameras")).toArray();
+                    if (!cameras.isEmpty())
+                        populateCameraList(cameras);
+                }
 
                 const QString current = m_hostEdit->text().trimmed();
                 if (current.isEmpty()
@@ -354,6 +390,16 @@ void MainWindow::setupConnections()
                                 error);
                     });
             });
+
+    // OTA update: upload .swu file to device.
+    connect(m_controlPanel, &ControlPanel::uploadRequested, this,
+            [this](const QString &filePath) {
+                if (m_updateClient->isBusy())
+                    return;
+                m_controlPanel->setError(QString());
+                m_updateClient->uploadFile(controlHost(), kUpdatePort,
+                                           filePath);
+            });
 }
 
 void MainWindow::connectStreams()
@@ -423,6 +469,14 @@ void MainWindow::pollStatus()
             QStringList lines;
             const QJsonArray cameras =
                 result.value(QStringLiteral("cameras")).toArray();
+
+            // Populate the camera dropdown from the device's actual camera
+            // list on the first successful status poll.
+            if (!m_cameraListPopulated && !cameras.isEmpty()) {
+                populateCameraList(cameras);
+                m_cameraListPopulated = true;
+            }
+
             for (const QJsonValue &value : cameras) {
                 const QJsonObject camera = value.toObject();
                 const int index =
@@ -494,4 +548,89 @@ void MainWindow::updateCalibrateEnabled()
 {
     m_controlPanel->setCalibrateEnabled(
         m_control->isConnected() && m_connected && !m_calibrator->isRunning());
+}
+
+void MainWindow::pollUpdateStatus()
+{
+    if (!m_control->isConnected())
+        return;
+    m_control->sendRequest(
+        QStringLiteral("get-update-status"), QJsonObject(),
+        [this](const QJsonObject &result, const QJsonObject &error) {
+            if (!error.isEmpty())
+                return;
+            m_controlPanel->updateWidget()->updateStatus(result);
+
+            // Keep polling while installing; stop on terminal states
+            const QString state =
+                result.value(QStringLiteral("state")).toString();
+            if (state == QStringLiteral("installing") ||
+                state == QStringLiteral("uploading"))
+                QTimer::singleShot(kStatusPollMs, this,
+                                   &MainWindow::pollUpdateStatus);
+        });
+}
+
+void MainWindow::populateCameraList(const QJsonArray &cameras)
+{
+    // Guard against re-entry from discovery + first get-status racing
+    if (m_cameraListPopulated)
+        return;
+
+    m_cameraSelect->clear();
+    m_cameraIndices.clear();
+
+    for (const QJsonValue &value : cameras) {
+        const QJsonObject cam = value.toObject();
+        const int index = cam.value(QStringLiteral("index")).toInt(-1);
+        if (index < 0)
+            continue;
+
+        const bool enabled = cam.value(QStringLiteral("enabled")).toBool(true);
+        const QString source =
+            cam.value(QStringLiteral("source")).toString();
+        const QString mount =
+            cam.value(QStringLiteral("mount")).toString(
+                QStringLiteral("cam%1").arg(index));
+
+        // Build a descriptive label: "cam0 — argus 1440×1080"
+        // or "cam1 — v4l2 (disabled)" if not enabled
+        QString label = mount;
+        if (!source.isEmpty())
+            label += QStringLiteral(" — %1").arg(source);
+        const int width =
+            static_cast<int>(cam.value(QStringLiteral("width")).toDouble(0));
+        const int height =
+            static_cast<int>(cam.value(QStringLiteral("height")).toDouble(0));
+        if (width > 0 && height > 0)
+            label += QStringLiteral(" %1×%2").arg(width).arg(height);
+        if (!enabled)
+            label += QStringLiteral(" (disabled)");
+
+        m_cameraSelect->addItem(label);
+        m_cameraIndices.append(index);
+    }
+
+    // Select the first enabled camera, or cam0 as fallback
+    int selectRow = 0;
+    for (int i = 0; i < cameras.size(); ++i) {
+        const QJsonObject cam = cameras.at(i).toObject();
+        if (cam.value(QStringLiteral("enabled")).toBool(true)) {
+            selectRow = i;
+            break;
+        }
+    }
+    if (m_cameraSelect->count() > 0) {
+        m_cameraSelect->setCurrentIndex(selectRow);
+        const int camIdx = comboBoxToCameraIndex(selectRow);
+        if (camIdx >= 0 && camIdx < 2)
+            m_paneStack->setCurrentIndex(camIdx);
+    }
+}
+
+int MainWindow::comboBoxToCameraIndex(int comboIndex) const
+{
+    if (comboIndex < 0 || comboIndex >= m_cameraIndices.size())
+        return -1;
+    return m_cameraIndices.at(comboIndex);
 }

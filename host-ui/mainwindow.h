@@ -1,6 +1,8 @@
 #pragma once
 
+#include <QJsonArray>
 #include <QJsonObject>
+#include <QList>
 #include <QMainWindow>
 #include <QStringList>
 #include <QUrl>
@@ -14,6 +16,7 @@ class QPushButton;
 class QMenu;
 class QStackedWidget;
 class QTimer;
+class UpdateClient;
 class VideoPane;
 class WhiteBalanceCalibrator;
 
@@ -42,7 +45,10 @@ private:
     QUrl streamUrl(int index) const;
     QString controlHost() const;
     void pollStatus();
+    void pollUpdateStatus();
     void runDiscovery();
+    void populateCameraList(const QJsonArray &cameras);
+    int comboBoxToCameraIndex(int comboIndex) const;
     void showRequestError(const QString &what, const QJsonObject &error);
     void updateCalibrateEnabled();
 
@@ -63,6 +69,7 @@ private:
     // Networking.
     ControlClient *m_control = nullptr;
     DiscoveryClient *m_discovery = nullptr;
+    UpdateClient *m_updateClient = nullptr;
     QStringList m_discoveredHosts;
     QTimer *m_statusTimer = nullptr;
 
@@ -73,4 +80,6 @@ private:
     // State.
     bool m_connected = false;
     bool m_controlsPopulated = false;
+    QList<int> m_cameraIndices;  // combo row -> actual camera index
+    bool m_cameraListPopulated = false;
 };

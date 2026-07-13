@@ -7,6 +7,7 @@ class CameraControls;
 class QCheckBox;
 class QLabel;
 class QPushButton;
+class UpdateWidget;
 
 // Right-hand sidebar: Device status section (control channel state, per-camera
 // poll results, sync trigger, calibrate button, error line) plus two
@@ -30,6 +31,9 @@ public:
     // Access camera control widgets for seeding from get-status.
     CameraControls *cameraControls(int index) const;
 
+    // Access the update widget for seeding from get-update-status.
+    UpdateWidget *updateWidget() const;
+
     // Sync trigger checkbox state (for programmatic revert on error).
     bool syncChecked() const;
 
@@ -43,6 +47,7 @@ signals:
     void cameraZoomChanged(int camera, double factor);
     void cameraIspComboChanged(int camera, const QString &param, int value);
     void cameraIspSpinChanged(int camera, const QString &param, double value);
+    void uploadRequested(const QString &filePath);
 
 private:
     QLabel *m_controlStatus = nullptr;
@@ -51,4 +56,5 @@ private:
     QCheckBox *m_syncCheck = nullptr;
     QPushButton *m_calibrateButton = nullptr;
     CameraControls *m_cameras[2] = {nullptr, nullptr};
+    UpdateWidget *m_updateWidget = nullptr;
 };

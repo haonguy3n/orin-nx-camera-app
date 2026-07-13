@@ -7,6 +7,7 @@
 
 #include "cameracontrols.h"
 #include "collapsiblesection.h"
+#include "updatewidget.h"
 
 ControlPanel::ControlPanel(QWidget *parent)
     : QScrollArea(parent)
@@ -91,6 +92,21 @@ ControlPanel::ControlPanel(QWidget *parent)
         connect(m_cameras[i], &CameraControls::ispSpinChanged, this,
                 &ControlPanel::cameraIspSpinChanged);
     }
+
+    // OTA update section.
+    auto *updateSection = new CollapsibleSection(
+        QStringLiteral("FIRMWARE UPDATE"), panel);
+    m_updateWidget = new UpdateWidget(updateSection->contentWidget());
+    auto *updateLayout = new QVBoxLayout(updateSection->contentWidget());
+    updateLayout->setSpacing(6);
+    updateLayout->setContentsMargins(10, 8, 10, 8);
+    updateLayout->addWidget(m_updateWidget);
+    updateSection->setExpanded(false);
+    layout->addWidget(updateSection);
+
+    connect(m_updateWidget, &UpdateWidget::uploadRequested, this,
+            &ControlPanel::uploadRequested);
+
     layout->addStretch(1);
 
     setWidget(panel);
@@ -101,6 +117,7 @@ void ControlPanel::setControlsEnabled(bool enabled)
     for (CameraControls *c : m_cameras)
         c->setEnabled(enabled);
     m_syncCheck->setEnabled(enabled);
+    m_updateWidget->setUpdateEnabled(enabled);
 }
 
 void ControlPanel::setControlStatus(const QString &text)
@@ -136,6 +153,11 @@ void ControlPanel::setSyncChecked(bool checked)
 CameraControls *ControlPanel::cameraControls(int index) const
 {
     return m_cameras[index];
+}
+
+UpdateWidget *ControlPanel::updateWidget() const
+{
+    return m_updateWidget;
 }
 
 bool ControlPanel::syncChecked() const
