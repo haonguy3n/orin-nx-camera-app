@@ -255,6 +255,86 @@ the RTSP (and, if its settings changed, control) server, exactly like
 the control connection may drop if `listen`/`control-port` changed.
 Connected RTSP clients are dropped on purpose.
 
+### `get-update-status`
+
+No params. → current SWUpdate installation status:
+
+```json
+{
+  "state": "installing",
+  "percent": 45,
+  "step": 2,
+  "total_steps": 7,
+  "current": "rootfs.ext4.gz"
+}
+```
+
+| state | meaning |
+|---|---|
+| `idle` | no update in progress |
+| `uploading` | .swu file is being uploaded to the device |
+| `installing` | swupdate is processing the image |
+| `success` | installation completed successfully |
+| `failure` | installation failed (`error` field has the message) |
+| `done` | installation finished, post-update hooks ran |
+
+`percent`/`step`/`total_steps`/`current` are only meaningful while
+`state` is `installing`. Poll this every 2 s during an update.
+
+## OTA firmware update (TCP, port 8557)
+
+Dedicated binary upload channel for `.swu` (SWUpdate) packages. The host
+UI sends the file over this port; the device saves it and triggers
+`swupdate` via its IPC API
+([docs](https://sbabic.github.io/swupdate/swupdate-ipc-interface.html)).
+Install progress is then polled via `get-update-status` on the control
+channel.
+
+The upload is on a separate port because the control channel is
+newline-delimited JSON — binary data would break framing.
+
+`[server] update-port` configures the port (default 8557, `0` disables).
+The server binds the same address as the RTSP server.
+
+### Upload protocol
+
+One connection = one upload. Data is streamed directly to swupdate via
+its IPC socket — no temp file on the device.
+
+1. Host connects to the update port.
+2. Host sends a JSON header line (newline-terminated):
+   ```json
+   {"size": 52428800}
+   ```
+3. Device connects to swupdate IPC, sends REQ_INSTALL, gets ACK, then
+   responds to host with:
+   ```json
+   {"ok": true}
+   ```
+   Or an error (connection closes after):
+   ```json
+   {"ok": false, "error": "swupdate busy or unavailable"}
+   ```
+4. Host streams exactly `size` raw bytes of the `.swu` file. The device
+   forwards each chunk directly to the swupdate IPC fd — swupdate starts
+   parsing the CPIO stream as data arrives, no temp file needed.
+5. When all `size` bytes are received, the device closes the swupdate
+   IPC fd (signals end-of-stream) and starts polling install status.
+6. Device sends the final response and closes:
+   ```json
+   {"ok": true, "state": "installing"}
+   ```
+   Or on error:
+   ```json
+   {"ok": false, "error": "upload incomplete"}
+   ```
+7. Host polls `get-update-status` on the control channel (port 8555)
+   for installation progress until `state` is `success` or `failure`.
+
+Max upload size: 2 GB. The device auto-installs during upload — there is
+no separate "apply" step. Installation begins as soon as swupdate has
+enough data to start parsing.
+
 ## Discovery (UDP, port 8556)
 
 So the host UI can find devices instead of assuming 192.168.55.1 (M3).

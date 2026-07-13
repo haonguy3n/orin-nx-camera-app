@@ -24,6 +24,10 @@ inherit cmake pkgconfig systemd externalsrc
 EXTERNALSRC = "${@os.path.normpath(os.path.join(os.path.realpath(d.getVar('VC_CAMERA_LAYERDIR')), '..', '..', 'embedded'))}"
 
 # json-glib + glib (gio) serve the TCP control protocol (proto/PROTOCOL.md).
+# swupdate is needed at runtime for OTA firmware updates (the app talks to
+# swupdate's IPC socket at /tmp/sockinstctrl); it's in RDEPENDS, not DEPENDS,
+# because the app defines the IPC structs locally (no swupdate headers/libs
+# at compile time).
 DEPENDS = " \
     glib-2.0 \
     gstreamer1.0 \
@@ -50,6 +54,7 @@ RDEPENDS:${PN} += " \
     gstreamer1.0-plugins-good-udp \
     gstreamer1.0-plugins-good-video4linux2 \
     gstreamer1.0-plugins-bad-videoparsersbad \
+    swupdate \
 "
 
 # Pin the unit install dir: systemd.pc is not in this recipe's sysroot, so

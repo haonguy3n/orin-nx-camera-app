@@ -81,7 +81,18 @@ changes need a reflash (or a DTB-partition update), not just a rootfs swap.
 
 After the initial flash (redundant layout: `USE_REDUNDANT_FLASH_LAYOUT=1`),
 subsequent updates go over the network — kernel, DTB and rootfs land in the
-inactive slot and the boot slot flips on success:
+inactive slot and the boot slot flips on success.
+
+### From the host UI (automated)
+
+The camera-viewer application has a "Firmware Update" section in the
+control panel sidebar. Click "Select .swu file...", pick the `.swu`
+package, then "Upload & Install". The host streams the file to the
+device over port 8557, the device installs it via swupdate IPC, and the
+progress bar tracks the installation. A reboot is needed after success
+(manually, or via the `reload` button — a future version may auto-reboot).
+
+### From the command line (manual)
 
 ```sh
 cd ~/Projects/orin-nx/build/tmp/deploy/images/p3768-0000-p3767-0000

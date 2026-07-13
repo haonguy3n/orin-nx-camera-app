@@ -28,6 +28,9 @@ const char* kSwupdateSocketPaths[] = {
 constexpr int kNumSocketPaths =
     sizeof(kSwupdateSocketPaths) / sizeof(kSwupdateSocketPaths[0]);
 
+/// swupdate API version (from network_ipc.h: SWUPDATE_API_VERSION).
+constexpr unsigned int kSwupdateApiVersion = 0x1;
+
 /// swupdate IPC magic number (from network_ipc.h).
 constexpr int kIpcMagic = 0x14052001;
 
@@ -108,9 +111,12 @@ int connect_swupdate_socket() {
 
         if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
                     sizeof(addr)) < 0) {
+            g_message("swupdate: connect(%s): %s, trying next", path,
+                      strerror(errno));
             close(fd);
-            continue;  // try next path silently
+            continue;  // try next path
         }
+        g_message("swupdate: connected to %s (fd=%d)", path, fd);
         return fd;
     }
     g_warning("swupdate: cannot connect to any IPC socket (tried %d paths)",
@@ -162,35 +168,57 @@ bool read_all(int fd, void* buf, size_t len) {
 /// NACK or error. After ACK, the caller streams the image on this fd.
 int request_install() {
     int fd = connect_swupdate_socket();
-    if (fd < 0)
+    if (fd < 0) {
+        g_warning("swupdate: request_install: no socket connection");
         return -1;
+    }
+
+    g_message("swupdate: sending REQ_INSTALL (magic=0x%08x, sizeof(ipc_message)=%zu)",
+              kIpcMagic, sizeof(ipc_message));
 
     ipc_message msg;
     memset(&msg, 0, sizeof(msg));
     msg.magic = kIpcMagic;
     msg.type = kReqInstall;
+    // swupdate checks apiversion == SWUPDATE_API_VERSION (1) and NACKs if
+    // it doesn't match. The req is in msg.data.instmsg.req.
+    msg.data.instmsg.req.apiversion = kSwupdateApiVersion;
 
     if (!write_all(fd, &msg, sizeof(msg))) {
+        g_warning("swupdate: request_install: write failed");
         close(fd);
         return -1;
     }
 
+    g_message("swupdate: waiting for ACK...");
     if (!read_all(fd, &msg, sizeof(msg))) {
+        g_warning("swupdate: request_install: read ACK failed");
         close(fd);
         return -1;
     }
+
+    g_message("swupdate: response type=%d, magic=0x%08x", msg.type, msg.magic);
 
     if (msg.type == kNack) {
-        g_warning("swupdate: install request NACK (update in progress?)");
+        // swupdate writes the error reason into msg.data.msg (char[128]).
+        // For "busy" it says "Installation in progress"; for apiversion
+        // mismatch it's empty (memset to 0).
+        char nack_msg[129];
+        memcpy(nack_msg, msg.data.raw, 128);
+        nack_msg[128] = '\0';
+        g_warning("swupdate: install request NACK: %s",
+                  nack_msg[0] ? nack_msg : "rejected (check apiversion)");
         close(fd);
         return -1;
     }
     if (msg.type != kAck) {
-        g_warning("swupdate: unexpected response type %d", msg.type);
+        g_warning("swupdate: unexpected response type %d (expected ACK=%d)",
+                  msg.type, kAck);
         close(fd);
         return -1;
     }
 
+    g_message("swupdate: REQ_INSTALL ACKed, ready to stream (fd=%d)", fd);
     return fd;
 }
 
