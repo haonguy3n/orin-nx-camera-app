@@ -1,9 +1,11 @@
 #include "updatewidget.h"
 
+#include <QCheckBox>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QJsonObject>
 #include <QLabel>
+#include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -27,6 +29,15 @@ UpdateWidget::UpdateWidget(QWidget *parent)
     m_uploadButton->setCursor(Qt::PointingHandCursor);
     m_uploadButton->setEnabled(false);
 
+    m_autoRebootCheck = new QCheckBox(
+        QStringLiteral("Auto-reboot after update"), this);
+    m_autoRebootCheck->setToolTip(QStringLiteral(
+        "automatically reboot the device when the update completes"));
+
+    m_rebootButton = new QPushButton(QStringLiteral("Reboot device"), this);
+    m_rebootButton->setCursor(Qt::PointingHandCursor);
+    m_rebootButton->setEnabled(false);
+
     m_uploadProgress = new QProgressBar(this);
     m_uploadProgress->setRange(0, 100);
     m_uploadProgress->setValue(0);
@@ -41,6 +52,8 @@ UpdateWidget::UpdateWidget(QWidget *parent)
     layout->addWidget(m_pickButton);
     layout->addWidget(m_fileLabel);
     layout->addWidget(m_uploadButton);
+    layout->addWidget(m_autoRebootCheck);
+    layout->addWidget(m_rebootButton);
     layout->addWidget(m_uploadProgress);
     layout->addWidget(m_statusLabel);
 
@@ -48,6 +61,8 @@ UpdateWidget::UpdateWidget(QWidget *parent)
             &UpdateWidget::onPickFile);
     connect(m_uploadButton, &QPushButton::clicked, this,
             &UpdateWidget::onUpload);
+    connect(m_rebootButton, &QPushButton::clicked, this,
+            &UpdateWidget::onReboot);
 }
 
 void UpdateWidget::setUpdateEnabled(bool enabled)
@@ -55,6 +70,7 @@ void UpdateWidget::setUpdateEnabled(bool enabled)
     m_pickButton->setEnabled(enabled);
     // Upload button stays disabled until a file is picked
     m_uploadButton->setEnabled(enabled && !m_filePath.isEmpty());
+    m_rebootButton->setEnabled(enabled);
 }
 
 void UpdateWidget::setUploadProgress(qint64 sent, qint64 total)
@@ -147,4 +163,19 @@ void UpdateWidget::onUpload()
     if (m_filePath.isEmpty())
         return;
     emit uploadRequested(m_filePath);
+}
+
+void UpdateWidget::onReboot()
+{
+    const auto ret = QMessageBox::question(
+        this, QStringLiteral("Reboot device"),
+        QStringLiteral("Reboot the device now?"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (ret == QMessageBox::Yes)
+        emit rebootRequested();
+}
+
+bool UpdateWidget::autoRebootChecked() const
+{
+    return m_autoRebootCheck->isChecked();
 }

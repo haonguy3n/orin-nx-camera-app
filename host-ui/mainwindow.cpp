@@ -400,6 +400,10 @@ void MainWindow::setupConnections()
                 m_updateClient->uploadFile(controlHost(), kUpdatePort,
                                            filePath);
             });
+
+    // Reboot device.
+    connect(m_controlPanel, &ControlPanel::rebootRequested, this,
+            &MainWindow::sendReboot);
 }
 
 void MainWindow::connectStreams()
@@ -568,6 +572,31 @@ void MainWindow::pollUpdateStatus()
                 state == QStringLiteral("uploading"))
                 QTimer::singleShot(kStatusPollMs, this,
                                    &MainWindow::pollUpdateStatus);
+
+            // Auto-reboot on success if the checkbox is checked
+            if (state == QStringLiteral("success") ||
+                state == QStringLiteral("done")) {
+                if (m_controlPanel->updateWidget()->autoRebootChecked()) {
+                    m_controlPanel->setError(QString());
+                    QTimer::singleShot(2000, this, &MainWindow::sendReboot);
+                }
+            }
+        });
+}
+
+void MainWindow::sendReboot()
+{
+    if (!m_control->isConnected())
+        return;
+    m_control->sendRequest(
+        QStringLiteral("reboot"), QJsonObject(),
+        [this](const QJsonObject &result, const QJsonObject &error) {
+            if (!error.isEmpty()) {
+                showRequestError(QStringLiteral("reboot"), error);
+                return;
+            }
+            m_controlPanel->setError(QStringLiteral(
+                "Rebooting device — connection will drop..."));
         });
 }
 

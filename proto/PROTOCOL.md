@@ -255,6 +255,13 @@ the RTSP (and, if its settings changed, control) server, exactly like
 the control connection may drop if `listen`/`control-port` changed.
 Connected RTSP clients are dropped on purpose.
 
+### `reboot`
+
+No params. → `{}` — then the device reboots after a 2-second delay
+(so the response can be sent). The control connection will drop when
+the device reboots. Useful after a firmware update to activate the
+new image.
+
 ### `get-update-status`
 
 No params. → current SWUpdate installation status:

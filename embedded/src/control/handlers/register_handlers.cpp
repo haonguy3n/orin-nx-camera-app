@@ -12,6 +12,7 @@
 void register_all_handlers(ControlRegistry& registry) {
     registry.register_handler(std::make_unique<PingHandler>());
     registry.register_handler(std::make_unique<ReloadHandler>());
+    registry.register_handler(std::make_unique<RebootHandler>());
     registry.register_handler(std::make_unique<GetStatusHandler>());
     registry.register_handler(std::make_unique<GetConfigHandler>());
     registry.register_handler(std::make_unique<SetExposureHandler>());

@@ -48,6 +48,7 @@ signals:
     void cameraIspComboChanged(int camera, const QString &param, int value);
     void cameraIspSpinChanged(int camera, const QString &param, double value);
     void uploadRequested(const QString &filePath);
+    void rebootRequested();
 
 private:
     QLabel *m_controlStatus = nullptr;
