@@ -38,6 +38,7 @@ bool Application::start_servers() {
             *rtsp_,
             *v4l2_factory_,
             *source_factory_,
+            swupdate_,
             [this]() { reload(); },
         };
         control_ = std::make_unique<ControlServer>(registry_,
@@ -57,10 +58,18 @@ bool Application::start_servers() {
         if (!discovery_->start())
             discovery_.reset();
     }
+
+    if (config_.update_port > 0) {
+        update_server_ = std::make_unique<UpdateServer>(swupdate_);
+        if (!update_server_->start(rtsp_->bound_address(),
+                                   config_.update_port))
+            update_server_.reset();  // non-fatal: streaming still works
+    }
     return true;
 }
 
 void Application::stop_servers() {
+    update_server_.reset();
     discovery_.reset();
     control_.reset();  // before rtsp: its context reaches into the Application
     rtsp_.reset();

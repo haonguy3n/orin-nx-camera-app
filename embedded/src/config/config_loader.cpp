@@ -119,6 +119,12 @@ Config FileConfigLoader::load() {
                   cfg.discovery_port);
         cfg.discovery_port = 8556;
     }
+    cfg.update_port = get_int(kf, "server", "update-port", cfg.update_port);
+    if (cfg.update_port < 0 || cfg.update_port > 65535) {
+        g_warning("config: [server] update-port %d out of range (using 8557)",
+                  cfg.update_port);
+        cfg.update_port = 8557;
+    }
 
     for (int i = 0; i < Config::kNumCameras; ++i) {
         char group[8];

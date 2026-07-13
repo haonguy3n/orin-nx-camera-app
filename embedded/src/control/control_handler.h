@@ -17,6 +17,7 @@
 #include "core/stream_controller.h"
 #include "pipeline/camera_source.h"
 #include "pipeline/source_factory.h"
+#include "update/swupdate_client.h"
 #include "v4l2/v4l2_device.h"
 
 // Bundles all the dependencies a control handler needs. References must
@@ -26,6 +27,7 @@ struct ControlContext {
     IStreamController& stream;
     IV4l2DeviceFactory& v4l2_factory;
     ISourceFactory& source_factory;
+    SwupdateClient& swupdate;
     std::function<void()> reload;
 };
 

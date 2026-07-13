@@ -5,6 +5,7 @@
 #include "control/handlers/status_handler.h"
 #include "control/handlers/system_handlers.h"
 #include "control/handlers/trigger_handler.h"
+#include "control/handlers/update_handler.h"
 #include "control/handlers/v4l2_control_handler.h"
 #include "control/handlers/zoom_handler.h"
 
@@ -23,4 +24,5 @@ void register_all_handlers(ControlRegistry& registry) {
     registry.register_handler(std::make_unique<ListControlsHandler>());
     registry.register_handler(std::make_unique<GetControlHandler>());
     registry.register_handler(std::make_unique<SetControlHandler>());
+    registry.register_handler(std::make_unique<GetUpdateStatusHandler>());
 }

@@ -61,5 +61,8 @@ struct Config {
     int control_port = 8555;
     // UDP discovery responder (always 0.0.0.0). 0 disables it.
     int discovery_port = 8556;
+    // OTA update file upload server (binary .swu upload, same address as
+    // RTSP). 0 disables it.
+    int update_port = 8557;
     CameraConfig cameras[kNumCameras];
 };

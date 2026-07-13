@@ -47,8 +47,12 @@ add_executable(camera-streamer
     src/control/handlers/isp_handler.cpp
     src/control/handlers/zoom_handler.cpp
     src/control/handlers/v4l2_control_handler.cpp
+    src/control/handlers/update_handler.cpp
     # discovery
     src/discovery/discovery_server.cpp
+    # update (OTA via swupdate)
+    src/update/swupdate_client.cpp
+    src/update/update_server.cpp
 )
 target_include_directories(camera-streamer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(camera-streamer PRIVATE -Wall -Wextra)

@@ -20,6 +20,8 @@
 #include "discovery/discovery_server.h"
 #include "pipeline/source_factory.h"
 #include "rtsp/rtsp_server.h"
+#include "update/swupdate_client.h"
+#include "update/update_server.h"
 #include "v4l2/v4l2_device.h"
 
 class Application {
@@ -51,11 +53,13 @@ private:
     std::unique_ptr<IV4l2DeviceFactory> v4l2_factory_;
     std::unique_ptr<ISourceFactory> source_factory_;
     ControlRegistry registry_;
+    SwupdateClient swupdate_;  // live across reloads (update may span reloads)
 
     // Servers (recreated on reload).
     std::unique_ptr<RtspServer> rtsp_;
     std::unique_ptr<ControlServer> control_;
     std::unique_ptr<DiscoveryServer> discovery_;
+    std::unique_ptr<UpdateServer> update_server_;
 
     GMainLoop* loop_ = nullptr;
     int exit_code_ = 0;
