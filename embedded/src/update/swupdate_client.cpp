@@ -11,6 +11,8 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cctype>
+#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -95,7 +97,8 @@ struct ipc_message {
 
 /// Connects to the swupdate IPC Unix domain socket. Tries known socket
 /// paths in order. Returns fd on success, -1 on failure (with g_warning).
-int connect_swupdate_socket() {
+/// |quiet| suppresses the per-connect log (used for status polling).
+int connect_swupdate_socket(bool quiet = false) {
     for (int i = 0; i < kNumSocketPaths; ++i) {
         const char* path = kSwupdateSocketPaths[i];
         int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -111,12 +114,14 @@ int connect_swupdate_socket() {
 
         if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
                     sizeof(addr)) < 0) {
-            g_message("swupdate: connect(%s): %s, trying next", path,
-                      strerror(errno));
+            if (!quiet)
+                g_message("swupdate: connect(%s): %s, trying next", path,
+                          strerror(errno));
             close(fd);
             continue;  // try next path
         }
-        g_message("swupdate: connected to %s (fd=%d)", path, fd);
+        if (!quiet)
+            g_message("swupdate: connected to %s (fd=%d)", path, fd);
         return fd;
     }
     g_warning("swupdate: cannot connect to any IPC socket (tried %d paths)",
@@ -225,7 +230,7 @@ int request_install() {
 /// Polls swupdate for status. Returns true if the status was read
 /// successfully (fills |out|), false on communication error.
 bool poll_status(UpdateStatus& out) {
-    int fd = connect_swupdate_socket();
+    int fd = connect_swupdate_socket(true);  // quiet — called every second
     if (fd < 0)
         return false;
 
@@ -248,8 +253,18 @@ bool poll_status(UpdateStatus& out) {
     out.step = 0;
     out.total_steps = 0;
     out.current_name.clear();
+    out.error.clear();
 
-    switch (msg.data.status.current) {
+    // The status response has:
+    //   data.status.current  — RECOVERY_STATUS enum
+    //   data.status.last_result
+    //   data.status.error    — error code
+    //   data.status.desc     — notification message text (may contain
+    //                          progress info like "10%" or "Step 2 of 7")
+    const int raw_status = msg.data.status.current;
+    const char* desc = msg.data.status.desc;
+
+    switch (raw_status) {
     case kStatusIdle:       out.state = UpdateState::Idle; break;
     case kStatusStart:      out.state = UpdateState::Installing; break;
     case kStatusRun:        out.state = UpdateState::Installing; break;
@@ -261,8 +276,42 @@ bool poll_status(UpdateStatus& out) {
     case kStatusProgress:   out.state = UpdateState::Installing; break;
     default:               out.state = UpdateState::Installing; break;
     }
-    if (msg.data.status.error != 0 && msg.data.status.desc[0] != '\0')
-        out.error = msg.data.status.desc;
+
+    // Parse progress percentage from the desc text.
+    // swupdate sends PROGRESS notifications with text like "10%" or
+    // "Step 2 of 7: rootfs.ext4". The GET_STATUS response dequeues one
+    // notification at a time and puts its text in desc.
+    if (desc[0] != '\0') {
+        out.current_name = desc;
+
+        // Try to parse "N%" from the desc text
+        const char* pct = strchr(desc, '%');
+        if (pct) {
+            // Walk backwards to find the start of the number
+            const char* start = pct;
+            while (start > desc && isdigit(static_cast<unsigned char>(*(start - 1))))
+                --start;
+            if (start < pct) {
+                out.percent = atoi(start);
+                if (out.percent < 0) out.percent = 0;
+                if (out.percent > 100) out.percent = 100;
+            }
+        }
+
+        // Try to parse "Step N of M" pattern
+        int step = 0, total = 0;
+        if (sscanf(desc, "Step %d of %d", &step, &total) >= 2) {
+            out.step = step;
+            out.total_steps = total;
+        }
+    }
+
+    if (msg.data.status.error != 0)
+        out.error = desc;
+
+    g_message("swupdate: status: raw=%d state=%d percent=%d desc=%.80s",
+              raw_status, static_cast<int>(out.state), out.percent,
+              desc[0] ? desc : "(empty)");
     return true;
 }
 
@@ -398,6 +447,9 @@ void SwupdateClient::run_install(const std::string& path) {
 }
 
 void SwupdateClient::poll_completion() {
+    UpdateState last_logged_state = UpdateState::Idle;
+    int last_logged_percent = -1;
+
     // Poll for completion (10 min timeout)
     for (int i = 0; i < 600; ++i) {
         UpdateStatus s;
@@ -407,6 +459,17 @@ void SwupdateClient::poll_completion() {
             total_steps_.store(s.total_steps);
             if (!s.current_name.empty())
                 current_name_ = s.current_name;
+
+            // Log on state change, percent change (every 5%), or every 30s
+            bool state_changed = (s.state != last_logged_state);
+            bool pct_changed = (abs(s.percent - last_logged_percent) >= 5);
+            if (state_changed || pct_changed || (i % 30 == 0)) {
+                if (state_changed)
+                    last_logged_state = s.state;
+                if (pct_changed)
+                    last_logged_percent = s.percent;
+            }
+
             if (s.state == UpdateState::Success ||
                 s.state == UpdateState::Done) {
                 g_message("swupdate: installation successful");
@@ -418,6 +481,15 @@ void SwupdateClient::poll_completion() {
                           s.error.c_str());
                 set_error(s.error);
                 set_state(UpdateState::Failure);
+                return;
+            }
+
+            // If swupdate goes back to IDLE after we started an install,
+            // it means the install finished but we missed the SUCCESS/DONE
+            // notification. Treat it as success if last_result was success.
+            if (s.state == UpdateState::Idle) {
+                g_message("swupdate: daemon idle after install, assuming done");
+                set_state(UpdateState::Success);
                 return;
             }
         }
