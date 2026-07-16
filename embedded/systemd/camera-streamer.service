@@ -1,9 +1,14 @@
 [Unit]
 Description=Camera RTSP streaming service
-After=network.target
+After=network.target camera-streamer-gencert.service
+Wants=camera-streamer-gencert.service
 
 [Service]
+Type=notify
 ExecStart=/usr/bin/camera-streamer
+# The app pets this from its GMainLoop (src/camera/core/Watchdog.cpp); a wedged
+# main loop means missed pets and systemd kills + restarts the service.
+WatchdogSec=15
 # Re-read the config and re-serve (e.g. switch listen= between usb/ethernet).
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure

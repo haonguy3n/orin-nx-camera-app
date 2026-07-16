@@ -2,6 +2,7 @@
 
 #include <QWidget>
 
+class QCheckBox;
 class QLabel;
 class QProgressBar;
 class QPushButton;
@@ -26,17 +27,26 @@ public:
     /// Called by MainWindow during file upload to show byte progress.
     void setUploadProgress(qint64 sent, qint64 total);
 
+    /// True if the auto-reboot checkbox is checked.
+    bool autoRebootChecked() const;
+
 signals:
     /// Emitted when the user picks a file and clicks Upload.
     void uploadRequested(const QString &filePath);
 
+    /// Emitted when the user clicks the Reboot button.
+    void rebootRequested();
+
 private:
     void onPickFile();
     void onUpload();
+    void onReboot();
 
     QLabel *m_fileLabel = nullptr;
     QPushButton *m_pickButton = nullptr;
     QPushButton *m_uploadButton = nullptr;
+    QCheckBox *m_autoRebootCheck = nullptr;
+    QPushButton *m_rebootButton = nullptr;
     QProgressBar *m_uploadProgress = nullptr;
     QLabel *m_statusLabel = nullptr;
 

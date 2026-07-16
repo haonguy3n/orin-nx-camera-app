@@ -46,6 +46,7 @@ private:
     QString controlHost() const;
     void pollStatus();
     void pollUpdateStatus();
+    void sendReboot();
     void runDiscovery();
     void populateCameraList(const QJsonArray &cameras);
     int comboBoxToCameraIndex(int comboIndex) const;

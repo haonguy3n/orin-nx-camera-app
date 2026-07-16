@@ -23,11 +23,15 @@
 #include "videopane.h"
 #include "whitebalancecalibrator.h"
 
+#include "proto/Protocol.h"
+
 namespace {
 
-constexpr quint16 kControlPort = 8555;  // PROTOCOL.md default
-constexpr quint16 kUpdatePort = 8557;   // OTA upload port default
+constexpr quint16 kControlPort = proto::kControlPort;
+constexpr quint16 kUpdatePort = proto::kUpdatePort;
 constexpr int kStatusPollMs = 2000;
+// Default device address on the USB CDC-NCM link (app default, not protocol).
+const QLatin1String kDefaultHost("192.168.55.1");
 
 } // namespace
 
@@ -90,7 +94,7 @@ void MainWindow::setupToolbar(QWidget *parent)
     topBar->setSpacing(6);
     topBar->setContentsMargins(8, 6, 8, 6);
 
-    m_hostEdit = new QLineEdit(QStringLiteral("192.168.55.1"), parent);
+    m_hostEdit = new QLineEdit(kDefaultHost, parent);
     m_hostEdit->setPlaceholderText(QStringLiteral("Device IP / rtsp://host:port"));
     m_hostEdit->setToolTip(
         QStringLiteral("Device IP/hostname, or an rtsp://host:port base URL"));
@@ -107,7 +111,7 @@ void MainWindow::setupToolbar(QWidget *parent)
     m_discoverButton = new QPushButton(QStringLiteral("Discover"), parent);
     m_discoverButton->setCursor(Qt::PointingHandCursor);
     m_discoverButton->setToolTip(
-        QStringLiteral("find devices via UDP broadcast (port 8556)"));
+        QStringLiteral("find devices via UDP broadcast (port %1)").arg(proto::kDiscoveryPort));
     m_discoverMenu = new QMenu(m_discoverButton);
 
     topBar->addWidget(m_hostEdit, 1);
@@ -220,7 +224,7 @@ void MainWindow::setupConnections()
 
                 const QString current = m_hostEdit->text().trimmed();
                 if (current.isEmpty()
-                    || current == QStringLiteral("192.168.55.1")
+                    || current == kDefaultHost
                     || m_discoveredHosts.contains(current))
                     m_hostEdit->setText(address);
                 if (!m_discoveredHosts.contains(address))
@@ -242,12 +246,12 @@ void MainWindow::setupConnections()
         QJsonObject params;
         params.insert(QStringLiteral("enabled"), enabled);
         m_control->sendRequest(
-            QStringLiteral("set-sync"), params,
+            QLatin1String(proto::methods::kSetSync), params,
             [this, enabled](const QJsonObject &, const QJsonObject &error) {
                 if (error.isEmpty())
                     return;
                 m_controlPanel->setSyncChecked(!enabled);  // revert
-                showRequestError(QStringLiteral("set-sync"), error);
+                showRequestError(QLatin1String(proto::methods::kSetSync), error);
             });
     });
 
@@ -285,7 +289,7 @@ void MainWindow::setupConnections()
                 params.insert(QStringLiteral("camera"), camera);
                 params.insert(QStringLiteral("us"), us);
                 m_control->sendRequest(
-                    QStringLiteral("set-exposure"), params,
+                    QLatin1String(proto::methods::kSetExposure), params,
                     [this, camera](const QJsonObject &, const QJsonObject &error) {
                         if (!error.isEmpty())
                             showRequestError(
@@ -300,7 +304,7 @@ void MainWindow::setupConnections()
                 params.insert(QStringLiteral("camera"), camera);
                 params.insert(QStringLiteral("gain"), gain);
                 m_control->sendRequest(
-                    QStringLiteral("set-gain"), params,
+                    QLatin1String(proto::methods::kSetGain), params,
                     [this, camera](const QJsonObject &, const QJsonObject &error) {
                         if (!error.isEmpty())
                             showRequestError(
@@ -315,7 +319,7 @@ void MainWindow::setupConnections()
                 params.insert(QStringLiteral("camera"), camera);
                 params.insert(QStringLiteral("mode"), mode);
                 m_control->sendRequest(
-                    QStringLiteral("set-trigger"), params,
+                    QLatin1String(proto::methods::kSetTrigger), params,
                     [this, camera](const QJsonObject &, const QJsonObject &error) {
                         if (!error.isEmpty())
                             showRequestError(
@@ -329,7 +333,7 @@ void MainWindow::setupConnections()
                 QJsonObject params;
                 params.insert(QStringLiteral("camera"), camera);
                 m_control->sendRequest(
-                    QStringLiteral("fire-trigger"), params,
+                    QLatin1String(proto::methods::kFireTrigger), params,
                     [this, camera](const QJsonObject &, const QJsonObject &error) {
                         if (!error.isEmpty())
                             showRequestError(
@@ -344,7 +348,7 @@ void MainWindow::setupConnections()
                 params.insert(QStringLiteral("camera"), camera);
                 params.insert(QStringLiteral("factor"), factor);
                 m_control->sendRequest(
-                    QStringLiteral("set-zoom"), params,
+                    QLatin1String(proto::methods::kSetZoom), params,
                     [this, camera](const QJsonObject &, const QJsonObject &error) {
                         if (!error.isEmpty()) {
                             showRequestError(
@@ -364,7 +368,7 @@ void MainWindow::setupConnections()
                 params.insert(QStringLiteral("param"), param);
                 params.insert(QStringLiteral("value"), value);
                 m_control->sendRequest(
-                    QStringLiteral("set-isp"), params,
+                    QLatin1String(proto::methods::kSetIsp), params,
                     [this, camera, param](const QJsonObject &,
                                           const QJsonObject &error) {
                         if (!error.isEmpty())
@@ -381,7 +385,7 @@ void MainWindow::setupConnections()
                 params.insert(QStringLiteral("param"), param);
                 params.insert(QStringLiteral("value"), value);
                 m_control->sendRequest(
-                    QStringLiteral("set-isp"), params,
+                    QLatin1String(proto::methods::kSetIsp), params,
                     [this, camera, param](const QJsonObject &,
                                           const QJsonObject &error) {
                         if (!error.isEmpty())
@@ -400,6 +404,10 @@ void MainWindow::setupConnections()
                 m_updateClient->uploadFile(controlHost(), kUpdatePort,
                                            filePath);
             });
+
+    // Reboot device.
+    connect(m_controlPanel, &ControlPanel::rebootRequested, this,
+            &MainWindow::sendReboot);
 }
 
 void MainWindow::connectStreams()
@@ -431,21 +439,22 @@ QUrl MainWindow::streamUrl(int index) const
 {
     QString text = m_hostEdit->text().trimmed();
     if (text.isEmpty())
-        text = QStringLiteral("192.168.55.1");
+        text = kDefaultHost;
 
     if (text.startsWith(QStringLiteral("rtsp://"), Qt::CaseInsensitive)) {
         while (text.endsWith(QLatin1Char('/')))
             text.chop(1);
         return QUrl(QStringLiteral("%1/cam%2").arg(text).arg(index));
     }
-    return QUrl(QStringLiteral("rtsp://%1:8554/cam%2").arg(text).arg(index));
+    return QUrl(QStringLiteral("rtsp://%1:%2/cam%3")
+                    .arg(text).arg(proto::kRtspPort).arg(index));
 }
 
 QString MainWindow::controlHost() const
 {
     QString text = m_hostEdit->text().trimmed();
     if (text.isEmpty())
-        text = QStringLiteral("192.168.55.1");
+        text = kDefaultHost;
     if (text.startsWith(QStringLiteral("rtsp://"), Qt::CaseInsensitive))
         return QUrl(text).host();
     return text;
@@ -454,10 +463,10 @@ QString MainWindow::controlHost() const
 void MainWindow::pollStatus()
 {
     m_control->sendRequest(
-        QStringLiteral("get-status"), QJsonObject(),
+        QLatin1String(proto::methods::kGetStatus), QJsonObject(),
         [this](const QJsonObject &result, const QJsonObject &error) {
             if (!error.isEmpty()) {
-                showRequestError(QStringLiteral("get-status"), error);
+                showRequestError(QLatin1String(proto::methods::kGetStatus), error);
                 return;
             }
 
@@ -521,7 +530,10 @@ void MainWindow::pollStatus()
                 if (!m_controlsPopulated)
                     m_controlPanel->cameraControls(index)->seedFromStatus(camera);
             }
-            m_controlsPopulated = true;
+            // Only mark seeded once cameras actually arrived — an early poll
+            // during device startup can report an empty list.
+            if (!cameras.isEmpty())
+                m_controlsPopulated = true;
             if (!m_calibrationResult.isEmpty())
                 lines << m_calibrationResult;
             if (!m_calibrator->isRunning())
@@ -555,7 +567,7 @@ void MainWindow::pollUpdateStatus()
     if (!m_control->isConnected())
         return;
     m_control->sendRequest(
-        QStringLiteral("get-update-status"), QJsonObject(),
+        QLatin1String(proto::methods::kGetUpdateStatus), QJsonObject(),
         [this](const QJsonObject &result, const QJsonObject &error) {
             if (!error.isEmpty())
                 return;
@@ -564,10 +576,35 @@ void MainWindow::pollUpdateStatus()
             // Keep polling while installing; stop on terminal states
             const QString state =
                 result.value(QStringLiteral("state")).toString();
-            if (state == QStringLiteral("installing") ||
-                state == QStringLiteral("uploading"))
+            if (state == QLatin1String(proto::update_states::kInstalling) ||
+                state == QLatin1String(proto::update_states::kUploading))
                 QTimer::singleShot(kStatusPollMs, this,
                                    &MainWindow::pollUpdateStatus);
+
+            // Auto-reboot on success if the checkbox is checked
+            if (state == QLatin1String(proto::update_states::kSuccess) ||
+                state == QLatin1String(proto::update_states::kDone)) {
+                if (m_controlPanel->updateWidget()->autoRebootChecked()) {
+                    m_controlPanel->setError(QString());
+                    QTimer::singleShot(2000, this, &MainWindow::sendReboot);
+                }
+            }
+        });
+}
+
+void MainWindow::sendReboot()
+{
+    if (!m_control->isConnected())
+        return;
+    m_control->sendRequest(
+        QLatin1String(proto::methods::kReboot), QJsonObject(),
+        [this](const QJsonObject &result, const QJsonObject &error) {
+            if (!error.isEmpty()) {
+                showRequestError(QLatin1String(proto::methods::kReboot), error);
+                return;
+            }
+            m_controlPanel->setError(QStringLiteral(
+                "Rebooting device — connection will drop..."));
         });
 }
 

@@ -106,6 +106,8 @@ ControlPanel::ControlPanel(QWidget *parent)
 
     connect(m_updateWidget, &UpdateWidget::uploadRequested, this,
             &ControlPanel::uploadRequested);
+    connect(m_updateWidget, &UpdateWidget::rebootRequested, this,
+            &ControlPanel::rebootRequested);
 
     layout->addStretch(1);
 
