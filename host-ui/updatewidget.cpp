@@ -10,6 +10,8 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
+#include "proto/Protocol.h"
+
 UpdateWidget::UpdateWidget(QWidget *parent)
     : QWidget(parent)
 {
@@ -93,7 +95,8 @@ void UpdateWidget::setUploadProgress(qint64 sent, qint64 total)
 void UpdateWidget::updateStatus(const QJsonObject &status)
 {
     const QString state =
-        status.value(QStringLiteral("state")).toString(QStringLiteral("idle"));
+        status.value(QStringLiteral("state"))
+            .toString(QLatin1String(proto::update_states::kIdle));
     const int percent =
         static_cast<int>(status.value(QStringLiteral("percent")).toDouble(0));
     const int step =
@@ -106,14 +109,15 @@ void UpdateWidget::updateStatus(const QJsonObject &status)
 
     // Build status text
     QString text = QStringLiteral("Status: %1").arg(state);
-    if (state == QStringLiteral("uploading")) {
+    if (state == QLatin1String(proto::update_states::kUploading)) {
         text += QStringLiteral(" (%1%)").arg(percent);
-    } else if (state == QStringLiteral("installing") && total > 0) {
+    } else if (state == QLatin1String(proto::update_states::kInstalling)
+               && total > 0) {
         text += QStringLiteral(" (step %1/%2, %3%)").arg(step).arg(total).arg(percent);
-    } else if (state == QStringLiteral("installing")) {
+    } else if (state == QLatin1String(proto::update_states::kInstalling)) {
         text += QStringLiteral(" (%1%)").arg(percent);
-    } else if (state == QStringLiteral("success") ||
-               state == QStringLiteral("done")) {
+    } else if (state == QLatin1String(proto::update_states::kSuccess) ||
+               state == QLatin1String(proto::update_states::kDone)) {
         text = QStringLiteral("Status: update complete — reboot the device");
     }
     if (!error.isEmpty())
@@ -122,20 +126,20 @@ void UpdateWidget::updateStatus(const QJsonObject &status)
     m_statusLabel->setText(text);
 
     // Progress bar: visible during upload and install, hidden otherwise
-    if (state == QStringLiteral("uploading")) {
+    if (state == QLatin1String(proto::update_states::kUploading)) {
         m_uploadProgress->setVisible(true);
         m_uploadProgress->setValue(percent);
         m_uploadProgress->setFormat(QStringLiteral("Uploading %p%"));
-    } else if (state == QStringLiteral("installing")) {
+    } else if (state == QLatin1String(proto::update_states::kInstalling)) {
         m_uploadProgress->setVisible(true);
         m_uploadProgress->setValue(percent);
         m_uploadProgress->setFormat(QStringLiteral("Installing %p%"));
-    } else if (state == QStringLiteral("success") ||
-               state == QStringLiteral("done")) {
+    } else if (state == QLatin1String(proto::update_states::kSuccess) ||
+               state == QLatin1String(proto::update_states::kDone)) {
         m_uploadProgress->setVisible(true);
         m_uploadProgress->setValue(100);
         m_uploadProgress->setFormat(QStringLiteral("Done"));
-    } else if (state == QStringLiteral("failure")) {
+    } else if (state == QLatin1String(proto::update_states::kFailure)) {
         m_uploadProgress->setVisible(false);
     } else {
         // idle or unknown

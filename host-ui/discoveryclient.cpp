@@ -6,9 +6,11 @@
 #include <QTimer>
 #include <QUdpSocket>
 
+#include "proto/Protocol.h"
+
 namespace {
 
-constexpr quint16 kDiscoveryPort = 8556;  // PROTOCOL.md "Discovery"
+constexpr quint16 kDiscoveryPort = proto::kDiscoveryPort;
 
 } // namespace
 
@@ -36,7 +38,7 @@ void DiscoveryClient::discover(int timeoutMs)
     m_socket->bind();  // ephemeral port; replies land here
 
     QJsonObject request;
-    request.insert(QStringLiteral("method"), QStringLiteral("discover"));
+    request.insert(QStringLiteral("method"), QLatin1String(proto::methods::kDiscover));
     const QByteArray datagram =
         QJsonDocument(request).toJson(QJsonDocument::Compact);
 

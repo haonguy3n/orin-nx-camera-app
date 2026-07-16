@@ -9,6 +9,8 @@
 #include "controlclient.h"
 #include "videopane.h"
 
+#include "proto/Protocol.h"
+
 namespace {
 constexpr double kWbTolerance = 0.015;
 constexpr int kMaxCalibrationPasses = 2;
@@ -96,13 +98,24 @@ void WhiteBalanceCalibrator::step()
     params.insert(QStringLiteral("wb_trim_r"), newR);
     params.insert(QStringLiteral("wb_trim_b"), newB);
     m_control->sendRequest(
-        QStringLiteral("set-tuning"), params,
+        QLatin1String(proto::methods::kSetTuning), params,
         [this, newR, newB](const QJsonObject &, const QJsonObject &error) {
             if (!m_running)
                 return;
             if (!error.isEmpty()) {
-                finish(QStringLiteral("set-tuning: %1").arg(
-                    error.value(QStringLiteral("message")).toString()));
+                // Devices without set-tuning answer kUnknownMethod (see
+                // Protocol.h) — say so plainly instead of echoing the raw
+                // "unknown method" error.
+                const bool unsupported =
+                    error.value(QStringLiteral("code")).toInt()
+                    == proto::kUnknownMethod;
+                finish(unsupported
+                           ? QStringLiteral("calibration failed: device "
+                                            "firmware does not support "
+                                            "set-tuning")
+                           : QStringLiteral("set-tuning: %1").arg(
+                                 error.value(QStringLiteral("message"))
+                                     .toString()));
                 return;
             }
             // The poll is paused and the device is about to restart, so

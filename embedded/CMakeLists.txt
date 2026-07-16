@@ -16,45 +16,55 @@ pkg_check_modules(GST REQUIRED IMPORTED_TARGET
     json-glib-1.0
 )
 
+# Tree layout follows folly/fboss: src/camera/ is the project dir
+# (fboss/fboss), src/camera/lib/ holds low-level device/system access
+# (fboss/lib), src/camera/folly/ holds vendored folly mimics with tests in
+# src/camera/folly/test/ (folly layout).
 add_executable(camera-streamer
     # core
-    src/main.cpp
-    src/core/application.cpp
+    src/camera/Main.cpp
+    src/camera/core/Application.cpp
+    src/camera/core/Watchdog.cpp
     # config
-    src/config/config_loader.cpp
-    # net
-    src/net/network_resolver.cpp
-    # v4l2
-    src/v4l2/v4l2_device.cpp
+    src/camera/config/ConfigLoader.cpp
+    # lib (low-level device/system access)
+    src/camera/lib/net/NetworkResolver.cpp
+    src/camera/lib/v4l2/V4l2Device.cpp
+    # folly mimics with .cpp implementations (GLib-backed)
+    src/camera/folly/io/async/AsyncServerSocket.cpp
+    src/camera/folly/io/async/SSLContext.cpp
     # pipeline
-    src/pipeline/pipeline_builder.cpp
-    src/pipeline/argus_source.cpp
-    src/pipeline/v4l2_source.cpp
-    src/pipeline/test_source.cpp
-    src/pipeline/source_factory.cpp
+    src/camera/pipeline/PipelineBuilder.cpp
+    src/camera/pipeline/ArgusSource.cpp
+    src/camera/pipeline/V4l2Source.cpp
+    src/camera/pipeline/TestSource.cpp
+    src/camera/pipeline/SourceFactory.cpp
     # rtsp
-    src/rtsp/mount_controller.cpp
-    src/rtsp/rtsp_server.cpp
+    src/camera/rtsp/MountController.cpp
+    src/camera/rtsp/RtspServer.cpp
     # control
-    src/control/json_util.cpp
-    src/control/control_registry.cpp
-    src/control/control_server.cpp
-    src/control/handlers/register_handlers.cpp
-    src/control/handlers/system_handlers.cpp
-    src/control/handlers/status_handler.cpp
-    src/control/handlers/exposure_handler.cpp
-    src/control/handlers/trigger_handler.cpp
-    src/control/handlers/isp_handler.cpp
-    src/control/handlers/zoom_handler.cpp
-    src/control/handlers/v4l2_control_handler.cpp
-    src/control/handlers/update_handler.cpp
+    src/camera/control/JsonUtil.cpp
+    src/camera/control/ControlRegistry.cpp
+    src/camera/control/ControlServer.cpp
+    src/camera/control/handlers/RegisterHandlers.cpp
+    src/camera/control/handlers/SystemHandlers.cpp
+    src/camera/control/handlers/StatusHandler.cpp
+    src/camera/control/handlers/ExposureHandler.cpp
+    src/camera/control/handlers/TriggerHandler.cpp
+    src/camera/control/handlers/IspHandler.cpp
+    src/camera/control/handlers/ZoomHandler.cpp
+    src/camera/control/handlers/V4l2ControlHandler.cpp
+    src/camera/control/handlers/UpdateHandler.cpp
     # discovery
-    src/discovery/discovery_server.cpp
+    src/camera/discovery/DiscoveryServer.cpp
     # update (OTA via swupdate)
-    src/update/swupdate_client.cpp
-    src/update/update_server.cpp
+    src/camera/update/SwupdateClient.cpp
+    src/camera/update/UpdateServer.cpp
 )
-target_include_directories(camera-streamer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# ../common: protocol constants shared with host-ui (single source of truth).
+target_include_directories(camera-streamer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../common)
 target_compile_options(camera-streamer PRIVATE -Wall -Wextra)
 target_compile_definitions(camera-streamer PRIVATE
     DEFAULT_CONF_PATH="${CMAKE_INSTALL_FULL_SYSCONFDIR}/camera-streamer.conf"
@@ -78,4 +88,5 @@ if(NOT SYSTEMD_SYSTEM_UNITDIR)
     set(SYSTEMD_SYSTEM_UNITDIR "${CMAKE_INSTALL_PREFIX}/lib/systemd/system")
 endif()
 install(FILES systemd/camera-streamer.service
+              systemd/camera-streamer-gencert.service
         DESTINATION ${SYSTEMD_SYSTEM_UNITDIR})

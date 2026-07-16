@@ -111,10 +111,7 @@ void VideoPane::restart(const QUrl &url)
 {
     setStatusText("connecting…");
     showVideo(false);
-    m_player->stop();
-    m_player->setSource(QUrl());
-    m_player->setSource(url);
-    m_player->play();
+    start(url);
 }
 
 void VideoPane::setStatusText(const QString &text)

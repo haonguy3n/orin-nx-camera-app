@@ -1,0 +1,21 @@
+[Unit]
+Description=Generate camera-streamer TLS server certificate (first boot)
+# Only when the cert doesn't exist yet; the key persists across updates
+# because /etc is on the persistent partition.
+ConditionPathExists=!/etc/camera-streamer/tls/server.crt
+Before=camera-streamer.service
+
+[Service]
+Type=oneshot
+# Self-signed EC P-256 device certificate, 10 years. The host app pins
+# this cert (or its public key) on first pairing. Client-cert CA for mTLS
+# ([server] tls-ca=) is provisioned by the host tooling, not generated here.
+ExecStart=/bin/sh -c '\
+    umask 077 && mkdir -p /etc/camera-streamer/tls && \
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+        -keyout /etc/camera-streamer/tls/server.key \
+        -out /etc/camera-streamer/tls/server.crt \
+        -days 3650 -nodes -subj "/CN=camera-streamer"'
+
+[Install]
+WantedBy=multi-user.target

@@ -49,7 +49,6 @@ private:
     QString m_filePath;
     qint64 m_fileSize = 0;
     qint64 m_sent = 0;       // file bytes confirmed written to kernel
-    bool m_headerSent = false;
     bool m_acked = false;    // device ACKed our header
     bool m_busy = false;
 };

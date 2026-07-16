@@ -54,7 +54,6 @@ void UpdateClient::uploadFile(const QString &host, quint16 port,
 
     m_filePath = filePath;
     m_sent = 0;
-    m_headerSent = false;
     m_acked = false;
     m_busy = true;
     m_socket->connectToHost(host, port);
@@ -80,7 +79,6 @@ void UpdateClient::onConnected()
     const QByteArray json =
         QJsonDocument(header).toJson(QJsonDocument::Compact) + '\n';
     m_socket->write(json);
-    m_headerSent = true;
     // Don't send file data yet — wait for the device's ACK (onReadyRead).
 }
 
@@ -181,7 +179,6 @@ void UpdateClient::onBytesWritten(qint64 bytes)
 void UpdateClient::finish(const QJsonObject &response, const QString &error)
 {
     m_busy = false;
-    m_headerSent = false;
     m_acked = false;
     if (m_file.isOpen())
         m_file.close();
