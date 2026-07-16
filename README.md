@@ -11,7 +11,11 @@ rtsp://192.168.55.1:8554/cam0   color IMX296C (Argus/ISP)
 rtsp://192.168.55.1:8554/cam1   mono IMX296  (Argus for now, see DESIGN M3)
 tcp://192.168.55.1:8555         JSON control protocol (proto/PROTOCOL.md)
 udp  192.168.55.1:8556          discovery responder
+tcp://192.168.55.1:8557         OTA .swu upload -> swupdate (A/B rootfs)
 ```
+
+The control and update channels support optional TLS/mTLS ("secure USB",
+`[server] tls-*` — see `embedded/README.md`).
 
 **Status**: M1 (streaming) and M2 (dual streams, host UI, control channel)
 verified on hardware — dual concurrent 1440×1080@60 H.265. M3 in progress:
@@ -24,8 +28,9 @@ via swupdate (A/B rootfs). See `DESIGN.md` for architecture and milestones.
 | Path | What |
 |---|---|
 | `DESIGN.md` | architecture, decisions, milestones, risks |
-| `embedded/` | `camera-streamer`: GStreamer RTSP + control/discovery servers (C++17) |
+| `embedded/` | `camera-streamer`: GStreamer RTSP + control/discovery/update servers (C++17, folly-style — see its README) |
 | `host-ui/` | `camera-viewer`: Qt6 dual-pane viewer + camera control panel (`./build.sh run`) |
+| `common/` | `proto/Protocol.h`: protocol constants (ports, methods, error codes) shared by both sides |
 | `proto/PROTOCOL.md` | the JSON/TCP control protocol both sides implement |
 | `yocto/meta-vc-camera/` | Yocto layer: VC kernel driver + DT, USB gadget, ISP tuning, image |
 | `tools/isp-tuning/` | DIY ISP calibration (black level, CCM) without NVIDIA's NDA tools |

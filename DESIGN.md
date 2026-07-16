@@ -21,7 +21,7 @@ over USB**, with a host-side UI application.
 │  │  - capture: Argus/V4L2 via GST    │ RTSP │ 192.168.│  └────────────────────┘  │
 │  │  - HW encode: nvv4l2h265enc      │ + TCP │ 55.0/24 │                          │
 │  │  - RTSP server /cam0 /cam1        │ ctrl  │         │                          │
-│  │  - control server (TCP/protobuf)  │       │         │                          │
+│  │  - control server (TCP/JSON±TLS)  │       │         │                          │
 │  └───────────────────────────────────┘      │         │                          │
 └─────────────────────────────────────────────┘         └──────────────────────────┘
 ```
@@ -228,20 +228,31 @@ host: `gst-launch-1.0 udpsrc port=5000 ! … ! autovideosink`.
 
 ## 4. Embedded application (`camera-streamer`, C++)
 
-C++17/20, CMake, systemd service. Milestone 1 keeps it thin — a supervised GStreamer
-graph:
+C++17, CMake, systemd service. A supervised GStreamer graph plus the servers
+around it (the tree below is the shipped structure — folly/fboss-style naming,
+`namespace camera`; see `embedded/README.md` for the full layout):
 
 ```
-camera-streamer
-├── config/         TOML/JSON: sensor mode, path (argus|v4l2), bitrate, ports
-├── capture/        CameraSource interface
-│     ├── ArgusSource   (nvarguscamerasrc bin)
-│     └── V4l2Source    (v4l2src bin + VC trigger-mode V4L2 controls)
-├── stream/         RtspServer (gst-rtsp-server, /cam0 /cam1)
-├── control/        ControlServer — TCP, newline-delimited JSON   [done, M2]
-│                     get/set exposure, gain, trigger mode, status, reload
-└── health/         watchdog: pipeline stall detection → exit → systemd restart
+camera-streamer (embedded/src/camera/)
+├── config/       INI (GKeyFile): sensor mode, path (argus|v4l2), bitrate, ports, TLS
+├── pipeline/     CameraSource strategies: ArgusSource | V4l2Source | TestSource
+├── rtsp/         RtspServer + per-camera MountController (gst-rtsp-server, /cam0 /cam1)
+├── control/      ControlServer — TCP(+TLS), newline-delimited JSON  [done, M2]
+│                   exposure/gain/trigger/ISP/zoom/sync, status, reload, reboot
+├── update/       UpdateServer (.swu upload, port 8557) + SwupdateClient (swupdate IPC)
+├── discovery/    UDP discovery responder
+├── core/         Application lifecycle + systemd watchdog; stall watchdog policy:
+│                   a stalled camera is disabled in place (others keep streaming),
+│                   exit-for-restart only when every camera is dead
+└── folly/        vendored folly-mimic support layer (Expected, File, Synchronized,
+                    SCOPE_EXIT, XLOGF, GIO-backed EventBase/AsyncServerSocket/SSLContext)
 ```
+
+Cross-cutting: `common/proto/Protocol.h` holds the protocol constants shared
+with the host UI; the control and update channels take optional TLS/mTLS
+(`[server] tls-cert/tls-key/tls-ca`, self-signed device cert generated on
+first boot — the "secure USB" story: only host software holding a
+CA-signed client cert can command the device).
 
 The control channel shipped as **newline-delimited JSON over TCP (port
 8555)** instead of protobuf — same wire role, but no codegen, no extra host
@@ -305,8 +316,10 @@ via Argus (mono debayers to a gray image, minor artifacts). For triggered captur
 switch cam1's DT mode to gray (`pixel_t`/Y10) and revisit the capture element.
 *Software side implemented*: `set-sync`/`fire-trigger` orchestration and per-frame
 `last_frame` metadata in the control protocol, UDP discovery (port 8556) with a
-Discover button in the host UI. *Still open*: on-target verification with real
-trigger wiring, OTA, factory flash flow.
+Discover button in the host UI, OTA via swupdate (A/B rootfs, streaming `.swu`
+upload on port 8557 from the host UI, reboot method), optional TLS/mTLS on the
+control/update channels. *Still open*: on-target verification with real
+trigger wiring, factory flash flow.
 
 ---
 

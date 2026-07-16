@@ -30,9 +30,11 @@ This repo is not cloned into the build project — it is bind-linked in:
   `meta-vc-camera`. yb (like kas) anchors a url-less repo at the project
   directory and skips git checkout for it, so the layer resolves through the
   symlink and nothing is ever fetched.
-- `camera-streamer.bb` builds `<repo>/embedded` via **externalsrc** — the
-  path is derived from the layer's real location (symlink resolved), so the
-  app also builds straight from this tree.
+- `camera-streamer.bb` builds this tree via **externalsrc** — `EXTERNALSRC`
+  is the repo root (derived from the layer's real location, symlink
+  resolved) with `OECMAKE_SOURCEPATH` pointing at `embedded/`. The repo
+  root matters: externalsrc's git-based checksumming needs `.git` at the
+  top, otherwise source edits produce silently stale builds.
 
 Once the repo has a remote, the yml entry can become a normal `url:`/`branch:`
 repo with `layers: yocto/meta-vc-camera:` and the symlink can go away.
@@ -44,8 +46,11 @@ repo with `layers: yocto/meta-vc-camera:` and the symlink can go away.
   ACM serial function, plus dnsmasq config to serve the host its address and
   a getty on the gadget serial port.
 - `recipes-apps/camera-streamer/camera-streamer.bb` — the C++ RTSP streaming
-  app from `../embedded` (CMake, gstreamer + gst-rtsp-server, installs its
-  own `camera-streamer.service` and `/etc/camera-streamer.conf`).
+  app from `../embedded` (CMake, gstreamer + gst-rtsp-server; runtime deps
+  `glib-networking` + `openssl-bin` for the TLS support). Installs
+  `camera-streamer.service` (systemd watchdog enabled), the first-boot TLS
+  certificate generator `camera-streamer-gencert.service`, and
+  `/etc/camera-streamer.conf`.
 - `recipes-images/camera-image.bb` — `demo-image-base` + NVIDIA GStreamer
   elements (`gstreamer1.0-plugins-nvarguscamerasrc/-nvvidconv/
   -nvvideo4linux2/-nvvideosinks`), `gstreamer1.0-rtsp-server`, `v4l-utils`,
@@ -89,8 +94,9 @@ The camera-viewer application has a "Firmware Update" section in the
 control panel sidebar. Click "Select .swu file...", pick the `.swu`
 package, then "Upload & Install". The host streams the file to the
 device over port 8557, the device installs it via swupdate IPC, and the
-progress bar tracks the installation. A reboot is needed after success
-(manually, or via the `reload` button — a future version may auto-reboot).
+progress bar tracks the installation. A reboot activates the new slot:
+tick the auto-reboot option before installing, or use the Reboot button
+(the control protocol's `reboot` method) after success.
 
 ### From the command line (manual)
 

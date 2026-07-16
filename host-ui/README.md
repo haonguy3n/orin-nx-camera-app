@@ -82,6 +82,14 @@ A per-camera **Zoom** spin box (`set-zoom`, 1–8× GPU center crop + upscale)
 automatically reconnects that video pane on success — zoom applies to new RTSP
 sessions, so the pane restarts to show the new framing.
 
+A **Firmware Update** group handles OTA: "Select .swu file..." then
+"Upload & Install" streams the package to the device's update port
+(**8557**, PROTOCOL.md "OTA firmware update"); the progress bar tracks
+the swupdate installation via `get-update-status` polling. An
+auto-reboot checkbox reboots the device when the install succeeds, and a
+**Reboot device** button (the `reboot` method) does it on demand —
+needed to activate the new A/B slot.
+
 **Calibrate whites** (Device group; point cam0 at something white/gray first)
 measures the channel imbalance of the near-neutral bright region in cam0's
 decoded video and writes a corrected white trim via `set-tuning`. Applying

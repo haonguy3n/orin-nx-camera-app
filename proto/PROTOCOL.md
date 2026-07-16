@@ -2,10 +2,11 @@
 
 TCP control channel between the host UI and `camera-streamer` on the device.
 
-- **Transport**: plain TCP, default port **8555** (`[server] control-port`,
-  `0` disables). The server binds the same address as the RTSP server
-  (`[server] listen`), so the control channel is reachable over the same
-  network(s) as the video.
+- **Transport**: TCP, default port **8555** (`[server] control-port`,
+  `0` disables), plaintext by default — optionally TLS/mTLS, see
+  "Transport security" below. The server binds the same address as the
+  RTSP server (`[server] listen`), so the control channel is reachable
+  over the same network(s) as the video.
 - **Framing**: newline-delimited UTF-8 JSON — exactly one JSON object per
   line (`\n` terminated) in each direction. No message may contain a raw
   newline. Debuggable by hand: `nc 192.168.55.1 8555`.
@@ -16,6 +17,31 @@ TCP control channel between the host UI and `camera-streamer` on the device.
 This replaces the protobuf channel sketched in DESIGN.md §4 — same wire role,
 but no codegen and no extra host dependency (Qt ships JSON; json-glib is in
 oe-core).
+
+The machine-readable constants (ports, method names, error codes, update
+states) live in `common/proto/Protocol.h` — pure C++17, included by both
+the embedded app and the Qt host UI. New methods/constants go there
+first; this file is the prose reference.
+
+## Transport security (TLS)
+
+The channels that *command* the device — control (8555) and update
+(8557) — can be TLS-wrapped; RTSP and discovery are unaffected. Off by
+default. In `[server]` on the device:
+
+- `tls-cert` + `tls-key` — enable TLS on both ports. The device ships a
+  self-signed EC P-256 certificate generated on first boot
+  (`camera-streamer-gencert.service`,
+  `/etc/camera-streamer/tls/server.crt`); clients pin it (or its public
+  key) on first pairing.
+- `tls-ca` — additionally **require** a client certificate signed by
+  this CA (mTLS): only authorized host software can control the camera.
+  An unauthorized client fails the handshake on its first read.
+
+Misconfiguration (only one of cert/key set, unreadable files) is a fatal
+startup error — the device never silently falls back to plaintext. When
+TLS is enabled the wire protocol is unchanged; clients simply wrap the
+connection (the handshake happens implicitly on first I/O).
 
 ## Envelope
 
@@ -301,7 +327,8 @@ The upload is on a separate port because the control channel is
 newline-delimited JSON — binary data would break framing.
 
 `[server] update-port` configures the port (default 8557, `0` disables).
-The server binds the same address as the RTSP server.
+The server binds the same address as the RTSP server, and is TLS-wrapped
+when TLS is configured (see "Transport security" above).
 
 ### Upload protocol
 
