@@ -35,10 +35,11 @@ cmake --build host-ui/build
 
 1. Plug in the device; wait for the USB network interface (host should get
    `192.168.55.100`, `ping 192.168.55.1` works).
-2. Start `camera-viewer`, leave `192.168.55.1` in the URL bar, click
-   **Connect**. Each pane shows its own status (connecting / playing /
-   error with the QMediaPlayer error message). Click **Disconnect** then
-   **Connect** to reconnect (or press Enter in the URL bar to reconnect
+2. Start `camera-viewer`, leave `192.168.55.1` in the URL bar, choose a
+   camera, then click **Connect**. The selected stream opens immediately;
+   selecting the other camera opens that stream on demand. This keeps a
+   failed camera from affecting the healthy stream. Click **Disconnect**
+   then **Connect** to reconnect (or press Enter in the URL bar to reconnect
    immediately).
 
 ## Zero-build fallback

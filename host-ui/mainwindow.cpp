@@ -147,8 +147,16 @@ void MainWindow::setupConnections()
     // Camera selector — switch the visible pane.
     connect(m_cameraSelect, &QComboBox::activated, this, [this](int row) {
         const int camIndex = comboBoxToCameraIndex(row);
-        if (camIndex >= 0 && camIndex < 2)
+        if (camIndex >= 0 && camIndex < 2) {
             m_paneStack->setCurrentIndex(camIndex);
+            // The viewer presents one camera at a time.  Opening every
+            // mount on connect made a broken /cam1 RTSP session contend with
+            // the selected healthy stream in Qt's media backend.  Defer a
+            // stream until the user selects its pane so a failed camera is
+            // isolated from the other one.
+            if (m_connected)
+                restartPane(camIndex);
+        }
     });
 
     // Connect / Disconnect toggle.
@@ -412,8 +420,11 @@ void MainWindow::setupConnections()
 
 void MainWindow::connectStreams()
 {
-    for (int i = 0; i < 2; ++i)
-        restartPane(i);
+    // This is a single-pane UI: only open the camera that is visible.  In
+    // particular, an unavailable second camera must not interfere with the
+    // selected camera's decoder/session.  Selecting the other camera opens
+    // it on demand (see setupConnections()).
+    restartPane(m_paneStack->currentIndex());
     m_control->connectToDevice(controlHost(), kControlPort);
     m_connected = true;
     m_connectButton->setText(QStringLiteral("Disconnect"));
