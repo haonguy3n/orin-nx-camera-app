@@ -4,19 +4,16 @@
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
-#include <dirent.h>
-#include <linux/usb/functionfs.h>
 #include <poll.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <sys/mount.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <chrono>
 #include <condition_variable>
@@ -31,67 +28,13 @@
 
 #include "camera/base/ScopeGuard.h"
 #include "camera/base/logging/xlog.h"
+#include "camera/secure/FfsGadget.h"
 #include "secure/SecureHandshake.h"
 #include "secure/SecureWire.h"
 #include "camera/secure/SecureRecord.h"
 
 namespace camera::secure {
 namespace {
-constexpr char kFfs[] = "/dev/ffs-secure";
-constexpr char kGadget[] = "/sys/kernel/config/usb_gadget/vc-camera";
-
-// Endpoint writes are blocking now, but ep0 and configfs writes are not
-// necessarily, and a gadget draining an earlier request can still report
-// EAGAIN.  Waiting for writability rather than failing matters because a
-// failed ServerHello write is never retried: the host just waits out its
-// whole handshake timeout.
-bool write_all(int fd, const void* data, size_t length) {
-    const auto* bytes = static_cast<const uint8_t*>(data);
-    while (length != 0) {
-        const ssize_t n = write(fd, bytes, length);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                pollfd writable{fd, POLLOUT, 0};
-                if (poll(&writable, 1, 1000) <= 0)
-                    return false;  // genuinely stuck, not merely busy
-                continue;
-            }
-            return false;
-        }
-        if (n == 0)
-            return false;
-        bytes += n;
-        length -= static_cast<size_t>(n);
-    }
-    return true;
-}
-
-std::vector<uint8_t> descriptors() {
-    const std::array<uint8_t, 9> interface = {9, 4, 0, 0, 2, 0xff, 0x53, 0x55, 1};
-    auto endpoint = [](uint8_t address, uint16_t packet) {
-        return std::array<uint8_t, 7>{7, 5, address, 2,
-            static_cast<uint8_t>(packet), static_cast<uint8_t>(packet >> 8), 0};
-    };
-    std::vector<uint8_t> body;
-    for (uint16_t packet : {uint16_t(64), uint16_t(512)}) {
-        const auto in = endpoint(0x81, packet), out = endpoint(0x02, packet);
-        body.insert(body.end(), interface.begin(), interface.end());
-        body.insert(body.end(), in.begin(), in.end());
-        body.insert(body.end(), out.begin(), out.end());
-    }
-    auto append32 = [](std::vector<uint8_t>& v, uint32_t x) {
-        for (int i = 0; i != 4; ++i) v.push_back(static_cast<uint8_t>(x >> (8 * i)));
-    };
-    std::vector<uint8_t> result;
-    append32(result, FUNCTIONFS_DESCRIPTORS_MAGIC_V2);
-    append32(result, 20 + body.size());
-    append32(result, FUNCTIONFS_HAS_FS_DESC | FUNCTIONFS_HAS_HS_DESC);
-    append32(result, 3); append32(result, 3);
-    result.insert(result.end(), body.begin(), body.end());
-    return result;
-}
 
 int connect_local(uint16_t port) {
     const int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -107,73 +50,6 @@ int connect_local(uint16_t port) {
     return fd;
 }
 
-bool write_file(const std::string& path, const std::string& value) {
-    const int fd = open(path.c_str(), O_WRONLY | O_CLOEXEC);
-    if (fd < 0) return false;
-    const bool ok = write_all(fd, value.data(), value.size());
-    close(fd);
-    return ok;
-}
-
-std::string first_udc() {
-    DIR* raw = opendir("/sys/class/udc");
-    if (raw == nullptr) return {};
-    std::unique_ptr<DIR, decltype(&closedir)> directory(raw, closedir);
-    while (dirent* entry = readdir(raw)) {
-        if (entry->d_name[0] != '.') return entry->d_name;
-    }
-    return {};
-}
-
-bool prepare_functionfs(std::string* error) {
-    // usb-gadget.service creates and binds the recovery NCM/ACM gadget first.
-    // FunctionFS cannot be linked into a bound gadget, so publish it here in
-    // the owning process and bounce the UDC once, before accepting sessions.
-    const std::string udc_path = std::string(kGadget) + "/UDC";
-    if (!write_file(udc_path, "\n")) {
-        // ENODEV means the gadget is already unbound, which is exactly the
-        // state left behind when a previous instance of this process died
-        // owning the function. Treating it as fatal made secure USB
-        // unrecoverable until a reboot: every restart failed here.
-        if (errno != ENODEV) {
-            *error = std::string("unbind USB gadget: ") + strerror(errno);
-            return false;
-        }
-    }
-    // Writing UDC completes the unbind before the write() syscall returns, so
-    // configfs is ready for the new function immediately after this point.
-    //
-    // A previous endpoint owner may have left a FunctionFS superblock mounted
-    // after its service exited. That mount holds the ffs.* instance and makes
-    // configfs report EBUSY when creating it.
-    if (umount(kFfs) != 0 && errno != EINVAL && errno != ENOENT && errno != EPERM) {
-        *error = std::string("unmount stale FunctionFS: ") + strerror(errno);
-        return false;
-    }
-    const std::string function = std::string(kGadget) + "/functions/ffs.secure";
-    if (mkdir(kFfs, 0755) != 0 && errno != EEXIST) {
-        *error = std::string("mkdir ") + kFfs + ": " + strerror(errno);
-        return false;
-    }
-    if (mkdir(function.c_str(), 0755) != 0 && errno != EEXIST) {
-        *error = std::string("create FunctionFS function ") + function + ": " + strerror(errno)
-            + (errno == ENOENT
-                   ? " (kernel registers no \"ffs\" configfs function type -- "
-                     "CONFIG_USB_CONFIGFS_F_FS is not enabled in this kernel)"
-                   : "");
-        return false;
-    }
-    if (mount("secure", kFfs, "functionfs", 0, nullptr) != 0) {
-        *error = std::string("mount FunctionFS: ") + strerror(errno);
-        return false;
-    }
-    const std::string link = std::string(kGadget) + "/configs/c.1/ffs.secure";
-    if (symlink(function.c_str(), link.c_str()) != 0 && errno != EEXIST) {
-        *error = std::string("link FunctionFS function: ") + strerror(errno);
-        return false;
-    }
-    return true;
-}
 
 constexpr uint8_t kCameras = 2;
 
@@ -446,7 +322,8 @@ struct Session {
                 fd = connect_local(port);
             if (fd < 0)
                 break;
-            if (write_all(fd, message.payload.data(), message.payload.size()))
+            if (endpoint_write_all(fd, message.payload.data(),
+                                   message.payload.size(), dead))
                 return true;
             close(fd);
             fd = -1;
@@ -659,41 +536,24 @@ void SecureUsbServer::run() {
     // Arm SIGUSR1 before any endpoint I/O: without a handler the wake signal
     // used by teardown would terminate the whole process.
     install_wake_signal();
-    // Every exit path must publish this, including the setup failures that
-    // return early -- stop() waits on it before joining.
+    // Every exit path must publish this, including the setup failure that
+    // returns early -- stop() waits on it before joining.
     SCOPE_EXIT { worker_exited_ = true; };
-    // ep0 remains open for this process lifetime; FunctionFS removes the
-    // function when it closes. usb-gadget.sh has already mounted the fs.
-    const std::string base_udc = first_udc();
-    auto restore_gadget = [&] {
-        if (!base_udc.empty())
-            write_file(std::string(kGadget) + "/UDC", base_udc);
-    };
-    std::string setup_error;
-    if (!prepare_functionfs(&setup_error)) {
-        XLOGF(ERR, "secure-usb: %s", setup_error.c_str());
-        restore_gadget();
+
+    // The gadget owns the FunctionFS lifecycle: its destructor removes the
+    // function (by closing ep0) when this scope exits.
+    auto gadget = FfsGadget::create();
+    if (!gadget.hasValue()) {
+        XLOGF(ERR, "secure-usb: %s", gadget.error().c_str());
         return;
     }
-    int ep0 = open("/dev/ffs-secure/ep0", O_RDWR | O_NONBLOCK);
-    if (ep0 < 0) { XLOGF(ERR, "secure-usb: open ep0: %s", strerror(errno)); restore_gadget(); return; }
-    const auto desc = descriptors();
-    const uint8_t strings[] = {2,0,0,0,25,0,0,0,1,0,0,0,1,0,0,0,9,4,'s','e','c','u','r','e',0};
-    if (!write_all(ep0, desc.data(), desc.size()) || !write_all(ep0, strings, sizeof(strings))) {
-        XLOGF(ERR, "secure-usb: publishing descriptors failed"); close(ep0); restore_gadget(); return;
-    }
-    const std::string udc = base_udc.empty() ? first_udc() : base_udc;
-    if (udc.empty() || !write_file(std::string(kGadget) + "/UDC", udc)) {
-        XLOGF(ERR, "secure-usb: rebinding UDC failed");
-        close(ep0); restore_gadget();
-        return;
-    }
+    const int ep0 = gadget.value()->control_endpoint();
+
     while (!stopping_) {
         serve_session(ep0);
         if (!stopping_)
             usleep(100000);  // let the host notice the drop before retrying
     }
-    close(ep0);
 }
 
 // One authenticated session lifetime of the endpoint pair.

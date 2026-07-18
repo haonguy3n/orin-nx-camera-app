@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(camera-streamer VERSION 0.4.0 LANGUAGES CXX)
 option(ENABLE_SECURE_USB "Build the authenticated FunctionFS USB transport" ON)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -81,6 +81,7 @@ if(ENABLE_SECURE_USB)
     target_sources(camera-streamer PRIVATE
         src/camera/secure/SecureRecord.cpp
         src/camera/secure/KeySchedule.cpp
+        src/camera/secure/FfsGadget.cpp
         src/camera/secure/SecureUsbServer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureHandshake.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureWire.cpp)
