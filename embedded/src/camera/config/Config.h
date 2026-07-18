@@ -99,6 +99,16 @@ struct Config {
     std::string tls_cert;  // PEM server certificate path
     std::string tls_key;   // PEM server private key path
     std::string tls_ca;    // PEM CA bundle for client verification
+
+    // On-device face detection (OpenCV YuNet on the GPU). When detect_model is
+    // set, each secure-USB camera pipeline grows a raw branch and a detection
+    // thread that emits face boxes over the metadata channel; the host draws
+    // the overlay. detect_width/height are the detector's working resolution.
+    bool detect_enabled = false;
+    std::string detect_model;  // YuNet .onnx path
+    int detect_width = 320;
+    int detect_height = 320;
+
     CameraConfig cameras[kNumCameras];
 };
 

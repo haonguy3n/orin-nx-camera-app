@@ -41,6 +41,7 @@ DEPENDS = " \
     gstreamer1.0-rtsp-server \
     json-glib \
     openssl \
+    opencv \
 "
 
 # Pipeline runtime elements: rtph265pay lives in -good (rtp), h265parse in

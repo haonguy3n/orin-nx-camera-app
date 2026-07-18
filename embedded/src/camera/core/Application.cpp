@@ -21,7 +21,8 @@ namespace {
 // The encode chain a source would use for RTSP, terminated at an appsink so
 // the secure USB transport gets the elementary stream straight from the
 // encoder.
-std::string usb_video_launch(ISourceFactory& factory, const CameraConfig& cam) {
+std::string usb_video_launch(ISourceFactory& factory, const CameraConfig& cam,
+                             const Config& cfg) {
     auto source = factory.create(cam.source);
     if (!source)
         return {};
@@ -32,7 +33,14 @@ std::string usb_video_launch(ISourceFactory& factory, const CameraConfig& cam) {
     const size_t at = launch.rfind(rtp_tail);
     if (at == std::string::npos)
         return {};
-    launch.replace(at, rtp_tail.size(), PipelineBuilder::appsink_tail(cam));
+    // With detection on, tee the source: one leg encodes as before, the other
+    // is the raw branch the detector consumes.
+    std::string tail = PipelineBuilder::appsink_tail(cam);
+    if (cfg.detect_enabled && !cfg.detect_model.empty()) {
+        tail = "tee name=t  t. ! " + tail + "  t. ! "
+             + PipelineBuilder::detect_branch(cfg.detect_width, cfg.detect_height);
+    }
+    launch.replace(at, rtp_tail.size(), tail);
     return launch;
 }
 
@@ -158,7 +166,8 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
             for (int i = 0; i < Config::kNumCameras; ++i) {
                 video_launch.push_back(
                     config_.cameras[i].enabled
-                        ? usb_video_launch(*source_factory_, config_.cameras[i])
+                        ? usb_video_launch(*source_factory_, config_.cameras[i],
+                                           config_)
                         : std::string());
             }
         }
@@ -168,6 +177,14 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
             config_.tls_key.empty() ? "/etc/camera-streamer/tls/server.key"
                                     : config_.tls_key,
             std::move(video_launch));
+        if (usb_only && config_.detect_enabled && !config_.detect_model.empty()) {
+            secure_usb_->set_face_detection(config_.detect_model,
+                                            config_.detect_width,
+                                            config_.detect_height);
+            XLOGF(INFO, "face detection enabled: %s (%dx%d)",
+                  config_.detect_model.c_str(), config_.detect_width,
+                  config_.detect_height);
+        }
         std::string secure_error;
         if (!secure_usb_->start(&secure_error)) {
             XLOGF(WARN, "secure-usb disabled: %s", secure_error.c_str());

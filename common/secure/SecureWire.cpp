@@ -107,7 +107,8 @@ camera::base::Expected<WireMessage, std::string> open_wire_record(
     if (plaintext.value().size() < 2)
         return camera::base::makeUnexpected(std::string("secure USB record has no header"));
     const auto channel = static_cast<Channel>(plaintext.value()[0]);
-    if (channel != Channel::Video && channel != Channel::Control && channel != Channel::Update)
+    if (channel != Channel::Video && channel != Channel::Control
+        && channel != Channel::Update && channel != Channel::Meta)
         return camera::base::makeUnexpected(std::string("unknown secure USB channel"));
     return WireMessage{channel, plaintext.value()[1],
                        std::vector<uint8_t>(plaintext.value().begin() + 2,

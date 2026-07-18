@@ -29,6 +29,11 @@ public:
     // transports that want frames rather than RTP (secure USB).
     static std::string appsink_tail(const CameraConfig& cam);
 
+    // A raw-BGR branch (`appsink name=detect`) at the given detector working
+    // resolution, for the face-detection tap. Prefixed with a tee leg so it
+    // can be spliced alongside the encode tail.
+    static std::string detect_branch(int width, int height);
+
     // Crop rectangle for digital zoom. nvvidconv's left/right/top/bottom
     // are coordinates of the crop rectangle on its input; even values keep
     // NV12 chroma alignment. Empty at zoom 1 (converter not inserted).

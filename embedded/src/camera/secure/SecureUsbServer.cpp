@@ -29,6 +29,7 @@
 
 #include "camera/base/ScopeGuard.h"
 #include "camera/base/logging/xlog.h"
+#include "camera/detect/FaceDetector.h"
 #include "camera/secure/FfsGadget.h"
 #include "secure/SecureHandshake.h"
 #include "secure/SecureWire.h"
@@ -110,6 +111,7 @@ bool endpoint_write_all(int fd, const uint8_t* bytes, size_t length,
 struct Pipeline {
     GstElement* element = nullptr;
     GstAppSink* sink = nullptr;
+    GstAppSink* detect = nullptr;  // optional raw-BGR branch for face detection
 
     ~Pipeline() {
         if (element) {
@@ -133,6 +135,10 @@ struct Pipeline {
             return false;
         }
         sink = GST_APP_SINK(raw);
+        // The detection branch is optional -- only present when the launch
+        // string carries a "detect" appsink (detection enabled).
+        if (GstElement* d = gst_bin_get_by_name(GST_BIN(element), "detect"))
+            detect = GST_APP_SINK(d);
         if (gst_element_set_state(element, GST_STATE_PLAYING) ==
             GST_STATE_CHANGE_FAILURE) {
             *error = "pipeline refused to start";
@@ -442,11 +448,53 @@ private:
     LocalTunnel tunnel_;
 };
 
-// Pulls one camera's RTSP mount, strips it to an H.265 elementary stream and
-// pushes that over the session.  RTSP therefore terminates on the device
-// instead of being tunnelled, so its round trips never cross USB.
+// Pulls raw BGR frames from the pipeline's optional detection branch, runs the
+// face detector, and pushes the boxes over Channel::Meta. Runs on its own
+// thread so inference never blocks the video path; boxes are droppable.
+void detection_loop(Session& session, uint8_t camera, GstAppSink* detect,
+                    detect::FaceDetector& detector,
+                    const std::atomic<bool>& stop) {
+    while (!session.dead && !stop) {
+        GstSample* sample = gst_app_sink_try_pull_sample(detect, 200 * GST_MSECOND);
+        if (sample == nullptr) continue;
+        int w = 0, h = 0;
+        if (GstCaps* caps = gst_sample_get_caps(sample)) {
+            const GstStructure* s = gst_caps_get_structure(caps, 0);
+            gst_structure_get_int(s, "width", &w);
+            gst_structure_get_int(s, "height", &h);
+        }
+        GstBuffer* buffer = gst_sample_get_buffer(sample);
+        GstMapInfo map;
+        if (w > 0 && h > 0 && buffer != nullptr
+            && gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+            const int stride = static_cast<int>(map.size) / h;
+            const auto boxes = detector.detect(map.data, w, h, stride);
+            gst_buffer_unmap(buffer, &map);
+            const std::string json = detect::to_meta_json(camera, w, h, boxes);
+            session.enqueue(Channel::Meta, camera,
+                            reinterpret_cast<const uint8_t*>(json.data()),
+                            json.size(), /*droppable=*/true);
+        }
+        gst_sample_unref(sample);
+    }
+}
+
+// Pulls one camera's encoded H.265 elementary stream and pushes it over the
+// session. When `detect_model` is set the pipeline also carries a raw branch,
+// and a detection_loop thread runs face detection alongside.
 void video_loop(Session& session, uint8_t camera, const std::string& description,
-                const std::atomic<bool>& enabled) {
+                const std::atomic<bool>& enabled, const std::string& detect_model,
+                int detect_w, int detect_h) {
+    // Load the detector once for the camera's lifetime (model load is heavy).
+    std::unique_ptr<detect::FaceDetector> detector;
+    if (!detect_model.empty()) {
+        auto d = detect::FaceDetector::create(detect_model, detect_w, detect_h);
+        if (d.hasValue())
+            detector = std::move(d.value());
+        else
+            XLOGF(WARN, "secure-usb: cam%u face detection disabled: %s",
+                  static_cast<unsigned>(camera), d.error().c_str());
+    }
     // A camera that is absent never produces a byte, and retrying it forever
     // recreates the device's RTSP mount every few seconds, which restarts its
     // frame watchdog and buries the log. Give up on a barren camera for the
@@ -468,6 +516,21 @@ void video_loop(Session& session, uint8_t camera, const std::string& description
             XLOGF(WARN, "secure-usb: cam%u pipeline did not start: %s",
                   static_cast<unsigned>(camera), error.c_str());
         } else {
+            // Detection runs alongside the video pull, on the raw branch, for
+            // this pipeline's lifetime. Joined before ~Pipeline tears the
+            // branch down.
+            std::atomic<bool> detect_stop{false};
+            std::thread detect_thread;
+            if (detector && pipeline.detect != nullptr) {
+                detect_thread = std::thread([&] {
+                    detection_loop(session, camera, pipeline.detect, *detector,
+                                   detect_stop);
+                });
+            }
+            SCOPE_EXIT {
+                detect_stop = true;
+                if (detect_thread.joinable()) detect_thread.join();
+            };
             size_t total = 0, reported = 0;
             while (!session.dead) {
                 // Bounded pull so session teardown is noticed promptly even
@@ -579,6 +642,13 @@ void SecureUsbServer::stop() {
         wake_until_exited(worker_.native_handle(), worker_exited_);
         worker_.join();
     }
+}
+
+void SecureUsbServer::set_face_detection(std::string model, int input_width,
+                                         int input_height) {
+    detect_model_ = std::move(model);
+    detect_width_ = input_width;
+    detect_height_ = input_height;
 }
 
 std::string SecureUsbServer::video_description(uint8_t camera) const {
@@ -716,7 +786,8 @@ void SecureUsbServer::serve_session(int ep0) {
                 for (uint8_t camera = 0; camera < kCameras; ++camera) {
                     workers.emplace_back([this, raw, camera] {
                         video_loop(*raw, camera, video_description(camera),
-                                   stream_enabled_[camera]);
+                                   stream_enabled_[camera], detect_model_,
+                                   detect_width_, detect_height_);
                     });
                 }
                 workers.emplace_back([raw] { raw->pump_tunnel(); });

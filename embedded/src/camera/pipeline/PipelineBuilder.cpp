@@ -54,6 +54,17 @@ std::string PipelineBuilder::appsink_tail(const CameraConfig& cam) {
     return s;
 }
 
+std::string PipelineBuilder::detect_branch(int width, int height) {
+    // NVMM -> CPU BGRx via nvvidconv, then BGR for OpenCV. Latest-frame only
+    // (max-buffers=1 drop=true): detection may lag encode, and stale frames
+    // are worthless. Named "detect" so Pipeline can find the appsink.
+    return "queue ! nvvidconv ! video/x-raw,format=BGRx"
+           " ! videoconvert ! video/x-raw,format=BGR"
+           ",width=" + std::to_string(width) +
+           ",height=" + std::to_string(height) +
+           " ! appsink name=detect sync=false max-buffers=1 drop=true";
+}
+
 std::string PipelineBuilder::zoom_crop(const CameraConfig& cam) {
     if (cam.zoom <= 1.0)
         return "";

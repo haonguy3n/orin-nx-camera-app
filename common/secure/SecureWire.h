@@ -18,6 +18,11 @@ enum class Channel : uint8_t {
     Video = 1,
     Control = 2,
     Update = 3,
+    // Detection metadata (face boxes), device -> host. JSON payload:
+    // {"camera":N,"w":W,"h":H,"faces":[{"x":,"y":,"w":,"h":,"score":}...]}
+    // in the camera's full-resolution pixel coordinates. Cheap and out-of-band
+    // so the codec stays clean and the host can toggle the overlay.
+    Meta = 4,
 };
 
 // One decoded record.  `stream` distinguishes concurrent streams sharing a

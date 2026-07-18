@@ -81,14 +81,19 @@ target_compile_definitions(camera-streamer PRIVATE
 target_link_libraries(camera-streamer PRIVATE PkgConfig::GST)
 
 if(ENABLE_SECURE_USB)
+    # OpenCV (with the CUDA DNN backend on the Orin) drives on-device face
+    # detection over the secure USB metadata channel.
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc objdetect dnn)
     target_sources(camera-streamer PRIVATE
         src/camera/secure/SecureRecord.cpp
         src/camera/secure/KeySchedule.cpp
         src/camera/secure/FfsGadget.cpp
         src/camera/secure/SecureUsbServer.cpp
+        src/camera/detect/FaceDetector.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureHandshake.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureWire.cpp)
-    target_link_libraries(camera-streamer PRIVATE OpenSSL::Crypto)
+    target_include_directories(camera-streamer PRIVATE ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(camera-streamer PRIVATE OpenSSL::Crypto ${OpenCV_LIBS})
     target_compile_definitions(camera-streamer PRIVATE ENABLE_SECURE_USB=1)
 endif()
 
