@@ -303,6 +303,8 @@ struct SecureUsbBridge::Impl {
     camera::secure::WireBuffer inbound;   // guarded by inboundMutex
     std::atomic<bool> usbFailed{false};
     size_t records = 0;                   // worker thread only
+    std::mutex metaMutex;
+    std::function<void(int, std::string)> metaHandler;  // guarded by metaMutex
 
     void readerLoop()
     {
@@ -381,6 +383,14 @@ struct SecureUsbBridge::Impl {
                     decoders[decoded.stream].push(decoded.stream,
                                                   decoded.payload.data(),
                                                   decoded.payload.size());
+                continue;
+            }
+            if (decoded.channel == camera::secure::Channel::Meta) {
+                std::lock_guard<std::mutex> lock(metaMutex);
+                if (metaHandler)
+                    metaHandler(decoded.stream,
+                                std::string(decoded.payload.begin(),
+                                            decoded.payload.end()));
                 continue;
             }
             const int index = channelIndex(decoded.channel);
@@ -686,6 +696,15 @@ void SecureUsbBridge::setVideoSink(int camera, QVideoSink *sink)
 {
     if (impl_ && camera >= 0 && camera < kCameras)
         impl_->decoders[camera].setSink(sink);
+}
+
+void SecureUsbBridge::setMetaHandler(std::function<void(int, std::string)> handler)
+{
+    // The worker is already reading, so guard the assignment.
+    if (impl_) {
+        std::lock_guard<std::mutex> lock(impl_->metaMutex);
+        impl_->metaHandler = std::move(handler);
+    }
 }
 
 bool SecureUsbBridge::isRunning() const

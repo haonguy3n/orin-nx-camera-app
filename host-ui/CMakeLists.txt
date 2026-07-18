@@ -34,6 +34,8 @@ qt_add_executable(camera-viewer
     updateclient.h
     updatewidget.cpp
     updatewidget.h
+    faceoverlay.cpp
+    faceoverlay.h
     videopane.cpp
     videopane.h
     whitebalancecalibrator.cpp
