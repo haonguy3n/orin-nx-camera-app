@@ -452,7 +452,7 @@ private:
 // face detector, and pushes the boxes over Channel::Meta. Runs on its own
 // thread so inference never blocks the video path; boxes are droppable.
 void detection_loop(Session& session, uint8_t camera, GstAppSink* detect,
-                    detect::FaceDetector& detector,
+                    detect::IFaceDetector& detector,
                     const std::atomic<bool>& stop) {
     while (!session.dead && !stop) {
         GstSample* sample = gst_app_sink_try_pull_sample(detect, 200 * GST_MSECOND);
@@ -486,9 +486,9 @@ void video_loop(Session& session, uint8_t camera, const std::string& description
                 const std::atomic<bool>& enabled, const std::string& detect_model,
                 int detect_w, int detect_h) {
     // Load the detector once for the camera's lifetime (model load is heavy).
-    std::unique_ptr<detect::FaceDetector> detector;
+    std::unique_ptr<detect::IFaceDetector> detector;
     if (!detect_model.empty()) {
-        auto d = detect::FaceDetector::create(detect_model, detect_w, detect_h);
+        auto d = detect::create_face_detector(detect_model, detect_w, detect_h);
         if (d.hasValue())
             detector = std::move(d.value());
         else

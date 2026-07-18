@@ -134,7 +134,6 @@ Config FileConfigLoader::load() {
     cfg.tls_key = get_string(kf, "server", "tls-key", cfg.tls_key);
     cfg.tls_ca = get_string(kf, "server", "tls-ca", cfg.tls_ca);
 
-    cfg.detect_enabled = get_bool(kf, "detect", "enabled", cfg.detect_enabled);
     cfg.detect_model = get_string(kf, "detect", "model", cfg.detect_model);
     cfg.detect_width = get_int(kf, "detect", "width", cfg.detect_width);
     cfg.detect_height = get_int(kf, "detect", "height", cfg.detect_height);

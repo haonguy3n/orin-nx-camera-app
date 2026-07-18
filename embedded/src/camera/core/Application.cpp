@@ -21,6 +21,13 @@ namespace {
 // The encode chain a source would use for RTSP, terminated at an appsink so
 // the secure USB transport gets the elementary stream straight from the
 // encoder.
+// Detection is on whenever the model file is present (readable). No config
+// toggle: shipping the model (CAMERA_FACE_MODEL) is the switch.
+bool face_detection_available(const Config& cfg) {
+    return !cfg.detect_model.empty()
+           && access(cfg.detect_model.c_str(), R_OK) == 0;
+}
+
 std::string usb_video_launch(ISourceFactory& factory, const CameraConfig& cam,
                              const Config& cfg) {
     auto source = factory.create(cam.source);
@@ -33,10 +40,10 @@ std::string usb_video_launch(ISourceFactory& factory, const CameraConfig& cam,
     const size_t at = launch.rfind(rtp_tail);
     if (at == std::string::npos)
         return {};
-    // With detection on, tee the source: one leg encodes as before, the other
-    // is the raw branch the detector consumes.
+    // With a detection model present, tee the source: one leg encodes as
+    // before, the other is the raw branch the detector consumes.
     std::string tail = PipelineBuilder::appsink_tail(cam);
-    if (cfg.detect_enabled && !cfg.detect_model.empty()) {
+    if (face_detection_available(cfg)) {
         tail = "tee name=t  t. ! " + tail + "  t. ! "
              + PipelineBuilder::detect_branch(cfg.detect_width, cfg.detect_height);
     }
@@ -177,13 +184,16 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
             config_.tls_key.empty() ? "/etc/camera-streamer/tls/server.key"
                                     : config_.tls_key,
             std::move(video_launch));
-        if (usb_only && config_.detect_enabled && !config_.detect_model.empty()) {
+        if (usb_only && face_detection_available(config_)) {
             secure_usb_->set_face_detection(config_.detect_model,
                                             config_.detect_width,
                                             config_.detect_height);
             XLOGF(INFO, "face detection enabled: %s (%dx%d)",
                   config_.detect_model.c_str(), config_.detect_width,
                   config_.detect_height);
+        } else if (usb_only && !config_.detect_model.empty()) {
+            XLOGF(INFO, "face detection off: model not found at %s",
+                  config_.detect_model.c_str());
         }
         std::string secure_error;
         if (!secure_usb_->start(&secure_error)) {

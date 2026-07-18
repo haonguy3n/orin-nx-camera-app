@@ -27,69 +27,74 @@ std::string to_meta_json(uint8_t camera, int frame_width, int frame_height,
     return out;
 }
 
-struct FaceDetector::Impl {
-    cv::Ptr<cv::FaceDetectorYN> yunet;
-    cv::Size input;
+namespace {
+
+// YuNet (cv::FaceDetectorYN) implementation of the loader interface, run
+// through the DNN CUDA backend (cuDNN) so inference lands on the Orin GPU.
+class YuNetDetector : public IFaceDetector {
+public:
+    YuNetDetector(cv::Ptr<cv::FaceDetectorYN> yunet, cv::Size input)
+        : yunet_(std::move(yunet)), input_(input) {}
+
+    std::vector<FaceBox> detect(const uint8_t* bgr, int frame_width,
+                                int frame_height, int stride) override {
+        std::vector<FaceBox> boxes;
+        try {
+            const cv::Mat frame(frame_height, frame_width, CV_8UC3,
+                                const_cast<uint8_t*>(bgr), static_cast<size_t>(stride));
+            cv::Mat resized;
+            cv::resize(frame, resized, input_);
+            yunet_->setInputSize(input_);
+            cv::Mat faces;
+            yunet_->detect(resized, faces);
+
+            const float sx = static_cast<float>(frame_width) / input_.width;
+            const float sy = static_cast<float>(frame_height) / input_.height;
+            boxes.reserve(faces.rows);
+            for (int i = 0; i < faces.rows; ++i) {
+                // Row layout: x, y, w, h, [5 landmarks], score.
+                const float* row = faces.ptr<float>(i);
+                FaceBox box;
+                box.x = static_cast<int>(row[0] * sx);
+                box.y = static_cast<int>(row[1] * sy);
+                box.w = static_cast<int>(row[2] * sx);
+                box.h = static_cast<int>(row[3] * sy);
+                box.score = row[faces.cols - 1];
+                boxes.push_back(box);
+            }
+        } catch (const cv::Exception&) {
+            // A transient decode/format hiccup should not kill the detection
+            // thread; the next frame gets a fresh attempt.
+            boxes.clear();
+        }
+        return boxes;
+    }
+
+private:
+    cv::Ptr<cv::FaceDetectorYN> yunet_;
+    cv::Size input_;
 };
 
-FaceDetector::FaceDetector(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
-FaceDetector::~FaceDetector() = default;
+}  // namespace
 
-base::Expected<std::unique_ptr<FaceDetector>, std::string> FaceDetector::create(
+base::Expected<std::unique_ptr<IFaceDetector>, std::string> create_face_detector(
     const std::string& model_path, int input_width, int input_height,
     float score_threshold) {
+    // Only YuNet today. When a second model is added, dispatch here on the
+    // model kind (e.g. a filename convention or a config field) and construct
+    // the matching IFaceDetector.
     try {
-        auto impl = std::make_unique<Impl>();
-        impl->input = cv::Size(input_width, input_height);
-        // Backend/target CUDA: OpenCV routes YuNet through the DNN CUDA
-        // backend (cuDNN), so inference runs on the Orin GPU. An OpenCV built
-        // without CUDA falls back to the CPU backend transparently.
-        impl->yunet = cv::FaceDetectorYN::create(
-            model_path, /*config=*/"", impl->input, score_threshold,
+        const cv::Size input(input_width, input_height);
+        auto yunet = cv::FaceDetectorYN::create(
+            model_path, /*config=*/"", input, score_threshold,
             /*nms_threshold=*/0.3f, /*top_k=*/50,
             cv::dnn::DNN_BACKEND_CUDA, cv::dnn::DNN_TARGET_CUDA);
-        if (impl->yunet.empty())
+        if (yunet.empty())
             return base::makeUnexpected(std::string("YuNet model failed to load: ") + model_path);
-        return std::unique_ptr<FaceDetector>(new FaceDetector(std::move(impl)));
+        return std::unique_ptr<IFaceDetector>(new YuNetDetector(std::move(yunet), input));
     } catch (const cv::Exception& e) {
-        return base::makeUnexpected(std::string("FaceDetector init: ") + e.what());
+        return base::makeUnexpected(std::string("face detector init: ") + e.what());
     }
-}
-
-std::vector<FaceBox> FaceDetector::detect(const uint8_t* bgr, int frame_width,
-                                          int frame_height, int stride) {
-    std::vector<FaceBox> boxes;
-    try {
-        const cv::Mat frame(frame_height, frame_width, CV_8UC3,
-                            const_cast<uint8_t*>(bgr), static_cast<size_t>(stride));
-        cv::Mat resized;
-        cv::resize(frame, resized, impl_->input);
-        // setInputSize must match the image handed to detect().
-        impl_->yunet->setInputSize(impl_->input);
-        cv::Mat faces;
-        impl_->yunet->detect(resized, faces);
-
-        // Scale detector-space boxes back to the source frame.
-        const float sx = static_cast<float>(frame_width) / impl_->input.width;
-        const float sy = static_cast<float>(frame_height) / impl_->input.height;
-        boxes.reserve(faces.rows);
-        for (int i = 0; i < faces.rows; ++i) {
-            // Row layout: x, y, w, h, [5 landmarks], score.
-            const float* row = faces.ptr<float>(i);
-            FaceBox box;
-            box.x = static_cast<int>(row[0] * sx);
-            box.y = static_cast<int>(row[1] * sy);
-            box.w = static_cast<int>(row[2] * sx);
-            box.h = static_cast<int>(row[3] * sy);
-            box.score = row[faces.cols - 1];
-            boxes.push_back(box);
-        }
-    } catch (const cv::Exception&) {
-        // A transient decode/format hiccup should not kill the detection
-        // thread; the next frame gets a fresh attempt.
-        boxes.clear();
-    }
-    return boxes;
 }
 
 }  // namespace camera::detect
