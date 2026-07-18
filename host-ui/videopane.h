@@ -22,6 +22,9 @@ public:
     explicit VideoPane(const QString &name, QWidget *parent = nullptr);
 
     void start(const QUrl &url);
+    // Secure USB mode: frames are pushed into videoSink() by the bridge, so
+    // the internal player must stay out of the way.
+    void startExternal();
     void stop();
     void restart(const QUrl &url);
     void setStatusText(const QString &text);

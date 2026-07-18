@@ -36,6 +36,24 @@ std::string PipelineBuilder::nvenc_tail(const CameraConfig& cam) {
     return s;
 }
 
+std::string PipelineBuilder::appsink_tail(const CameraConfig& cam) {
+    // Same encode chain as nvenc_tail, terminated at the parser instead of
+    // the RTP payloader: the secure USB transport wants the H.265 elementary
+    // stream, not RTP. Tapping here is what lets a USB-only device skip RTSP
+    // entirely -- no payload/depayload round trip through loopback.
+    const bool h265 = cam.codec == "h265";
+    std::string s = "queue ! ";
+    s += h265 ? "nvv4l2h265enc" : "nvv4l2h264enc";
+    s += " bitrate=" + std::to_string(cam.bitrate) +
+         " insert-sps-pps=true idrinterval=30 maxperf-enable=true ! ";
+    s += h265 ? "h265parse" : "h264parse";
+    s += " config-interval=-1 ! ";
+    s += h265 ? "video/x-h265,stream-format=byte-stream"
+              : "video/x-h264,stream-format=byte-stream";
+    s += " ! appsink name=sink sync=false max-buffers=8 drop=true";
+    return s;
+}
+
 std::string PipelineBuilder::zoom_crop(const CameraConfig& cam) {
     if (cam.zoom <= 1.0)
         return "";

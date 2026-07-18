@@ -32,6 +32,10 @@ constexpr quint16 kUpdatePort = proto::kUpdatePort;
 constexpr int kStatusPollMs = 2000;
 // Default device address on the USB CDC-NCM link (app default, not protocol).
 const QLatin1String kDefaultHost("192.168.55.1");
+const QLatin1String kSecureUsbHost("127.0.0.1");
+constexpr int kTransportAuto = 0;
+constexpr int kTransportSecureUsb = 1;
+constexpr int kTransportNetwork = 2;
 
 } // namespace
 
@@ -60,6 +64,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_statusTimer = new QTimer(this);
     m_statusTimer->setInterval(kStatusPollMs);
     connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::pollStatus);
+
 
     // Calibration.
     m_calibrator = new WhiteBalanceCalibrator(m_control, this);
@@ -99,6 +104,17 @@ void MainWindow::setupToolbar(QWidget *parent)
     m_hostEdit->setToolTip(
         QStringLiteral("Device IP/hostname, or an rtsp://host:port base URL"));
 
+    m_transportSelect = new QComboBox(parent);
+    m_transportSelect->addItem(QStringLiteral("Auto"));
+    m_transportSelect->addItem(QStringLiteral("Secure USB"));
+    m_transportSelect->addItem(QStringLiteral("Network"));
+    m_transportSelect->setCurrentIndex(kTransportAuto);
+    m_transportSelect->setToolTip(
+        QStringLiteral("Secure USB uses the authenticated local transport; "
+                       "Network uses CDC-NCM/ethernet directly; Auto prefers USB"));
+    m_hostEdit->setEnabled(true);
+
+
     m_cameraSelect = new QComboBox(parent);
     m_cameraSelect->setToolTip(
         QStringLiteral("switch the video pane between cameras"));
@@ -115,6 +131,7 @@ void MainWindow::setupToolbar(QWidget *parent)
     m_discoverMenu = new QMenu(m_discoverButton);
 
     topBar->addWidget(m_hostEdit, 1);
+    topBar->addWidget(m_transportSelect);
     topBar->addWidget(m_cameraSelect);
     topBar->addWidget(m_connectButton);
     topBar->addWidget(m_discoverButton);
@@ -144,6 +161,22 @@ void MainWindow::setupVideoArea(QWidget *parent)
 
 void MainWindow::setupConnections()
 {
+    connect(m_transportSelect, &QComboBox::currentIndexChanged, this,
+            [this](int) {
+                if (m_connected)
+                    disconnectStreams();
+                const bool required =
+                    m_transportSelect->currentIndex() == kTransportSecureUsb;
+                m_hostEdit->setEnabled(!required);
+                m_discoverButton->setEnabled(!required);
+                if (required)
+                    m_hostEdit->setPlaceholderText(
+                        QStringLiteral("Secure USB (local authenticated transport)"));
+                else
+                    m_hostEdit->setPlaceholderText(
+                        QStringLiteral("Device IP / rtsp://host:port"));
+            });
+
     // Camera selector — switch the visible pane.
     connect(m_cameraSelect, &QComboBox::activated, this, [this](int row) {
         const int camIndex = comboBoxToCameraIndex(row);
@@ -420,6 +453,8 @@ void MainWindow::setupConnections()
 
 void MainWindow::connectStreams()
 {
+    if (!startSelectedTransport())
+        return;
     // This is a single-pane UI: only open the camera that is visible.  In
     // particular, an unavailable second camera must not interfere with the
     // selected camera's decoder/session.  Selecting the other camera opens
@@ -436,6 +471,8 @@ void MainWindow::disconnectStreams()
     for (VideoPane *pane : m_panes)
         pane->stop();
     m_control->disconnectFromDevice();
+    m_secureUsbBridge.reset();
+    m_usingSecureUsb = false;
     m_connected = false;
     m_connectButton->setText(QStringLiteral("Connect"));
     updateCalibrateEnabled();
@@ -443,12 +480,17 @@ void MainWindow::disconnectStreams()
 
 void MainWindow::restartPane(int index)
 {
+    if (usesSecureUsb()) {
+        m_panes[index]->startExternal();
+        return;
+    }
     m_panes[index]->restart(streamUrl(index));
 }
 
 QUrl MainWindow::streamUrl(int index) const
 {
-    QString text = m_hostEdit->text().trimmed();
+    QString text = usesSecureUsb() ? QString(kSecureUsbHost)
+                                   : m_hostEdit->text().trimmed();
     if (text.isEmpty())
         text = kDefaultHost;
 
@@ -463,6 +505,8 @@ QUrl MainWindow::streamUrl(int index) const
 
 QString MainWindow::controlHost() const
 {
+    if (usesSecureUsb())
+        return QString(kSecureUsbHost);
     QString text = m_hostEdit->text().trimmed();
     if (text.isEmpty())
         text = kDefaultHost;
@@ -470,6 +514,40 @@ QString MainWindow::controlHost() const
         return QUrl(text).host();
     return text;
 }
+
+bool MainWindow::usesSecureUsb() const
+{
+    return m_usingSecureUsb;
+}
+
+bool MainWindow::startSelectedTransport()
+{
+    m_secureUsbBridge.reset();
+    m_usingSecureUsb = false;
+    if (m_transportSelect->currentIndex() == kTransportNetwork)
+        return true;
+
+    QString error;
+    m_secureUsbBridge = SecureUsbBridge::start(&error);
+    if (m_secureUsbBridge) {
+        m_usingSecureUsb = true;
+        // Decoded frames go straight into each pane's sink -- no local RTSP
+        // hop, no player "connecting" state.
+        for (int i = 0; i < 2; ++i)
+            m_secureUsbBridge->setVideoSink(i, m_panes[i]->videoSink());
+        return true;
+    }
+
+    const bool absent = error.startsWith(QStringLiteral("no secure USB camera found"));
+    if (m_transportSelect->currentIndex() == kTransportAuto && absent)
+        return true;
+
+    // A camera that enumerated but failed authentication/configuration must
+    // never silently downgrade to the network transport.
+    m_controlPanel->setError(QStringLiteral("secure USB: %1").arg(error));
+    return false;
+}
+
 
 void MainWindow::pollStatus()
 {

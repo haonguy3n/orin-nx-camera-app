@@ -40,6 +40,7 @@ DEPENDS = " \
     gstreamer1.0-plugins-base \
     gstreamer1.0-rtsp-server \
     json-glib \
+    openssl \
 "
 
 # Pipeline runtime elements: rtph265pay lives in -good (rtp), h265parse in
@@ -54,10 +55,13 @@ DEPENDS = " \
 # a broken media graph (GST_IS_ELEMENT assertion cascade, no data).
 # glib-networking: GIO TLS backend for the control/update servers'
 # [server] tls-* support. openssl-bin: first-boot device cert generation
-# (camera-streamer-gencert.service).
+# (camera-streamer-gencert.service). gstreamer1.0: not required by the
+# application (secure USB builds its per-camera H.265 pipeline in-process),
+# but gst-launch-1.0 is what makes a broken mount diagnosable on target.
 RDEPENDS:${PN} += " \
     glib-networking \
     openssl-bin \
+    gstreamer1.0 \
     gstreamer1.0-plugins-base-app \
     gstreamer1.0-plugins-good-rtp \
     gstreamer1.0-plugins-good-rtpmanager \
@@ -71,6 +75,7 @@ RDEPENDS:${PN} += " \
 # Pin the unit install dir: systemd.pc is not in this recipe's sysroot, so
 # CMake's fallback (/usr/lib/systemd/system) would mismatch systemd_system_unitdir.
 EXTRA_OECMAKE += "-DSYSTEMD_SYSTEM_UNITDIR=${systemd_system_unitdir}"
+EXTRA_OECMAKE += "-DENABLE_SECURE_USB=ON"
 
 SYSTEMD_SERVICE:${PN} = "camera-streamer.service camera-streamer-gencert.service"
 SYSTEMD_AUTO_ENABLE = "enable"

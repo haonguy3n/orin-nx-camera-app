@@ -99,6 +99,14 @@ void VideoPane::start(const QUrl &url)
     m_player->play();
 }
 
+void VideoPane::startExternal()
+{
+    m_player->stop();
+    m_player->setSource(QUrl());
+    setStatusText("waiting for frames…");
+    showVideo(false);  // first pushed frame flips this via videoFrameChanged
+}
+
 void VideoPane::stop()
 {
     m_player->stop();

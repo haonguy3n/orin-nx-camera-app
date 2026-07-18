@@ -33,6 +33,7 @@ via swupdate (A/B rootfs). See `DESIGN.md` for architecture and milestones.
 | `common/` | `proto/Protocol.h`: protocol constants (ports, methods, error codes) shared by both sides |
 | `proto/PROTOCOL.md` | the JSON/TCP control protocol both sides implement |
 | `yocto/meta-vc-camera/` | Yocto layer: VC kernel driver + DT, USB gadget, ISP tuning, image |
+| `common/secure/` | Native C++ P-256 handshake shared by the device endpoint and host USB client |
 | `tools/isp-tuning/` | DIY ISP calibration (black level, CCM) without NVIDIA's NDA tools |
 
 ## Quickstart
@@ -61,6 +62,15 @@ trigger, digital zoom and ISP controls live in the right-hand panel.
 ffplay -rtsp_transport tcp rtsp://192.168.55.1:8554/cam0
 printf '{"id":1,"method":"get-status"}\n' | nc -q1 192.168.55.1 8555
 ```
+
+## Secure USB transport
+
+The native C++ secure-transport protocol uses an ephemeral P-256 ECDH
+exchange, the device's pinned certificate to sign the handshake, HKDF-SHA256
+directional keys, and ChaCha20-Poly1305 records. The FunctionFS/libusb relay
+that binds these records to the viewer is tracked alongside it. The existing
+CDC-NCM RTSP/control path remains available for recovery and can be selected
+at image-build time with `CAMERA_USB_TRANSPORT=ncm`.
 
 ## Bring-up lessons (why some defaults look unusual)
 

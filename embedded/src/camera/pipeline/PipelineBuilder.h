@@ -25,6 +25,10 @@ public:
     // encoder the NVMM buffer pool starves after the first frame.
     static std::string nvenc_tail(const CameraConfig& cam);
 
+    // Encode chain ending in an appsink carrying the elementary stream, for
+    // transports that want frames rather than RTP (secure USB).
+    static std::string appsink_tail(const CameraConfig& cam);
+
     // Crop rectangle for digital zoom. nvvidconv's left/right/top/bottom
     // are coordinates of the crop rectangle on its input; even values keep
     // NV12 chroma alignment. Empty at zoom 1 (converter not inserted).

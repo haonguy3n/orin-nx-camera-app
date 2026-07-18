@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(camera-streamer VERSION 0.4.0 LANGUAGES CXX)
+option(ENABLE_SECURE_USB "Build the authenticated FunctionFS USB transport" ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,8 +9,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(GNUInstallDirs)
 
 find_package(PkgConfig REQUIRED)
+if(ENABLE_SECURE_USB)
+    find_package(OpenSSL REQUIRED)
+endif()
 pkg_check_modules(GST REQUIRED IMPORTED_TARGET
     gstreamer-1.0
+    gstreamer-app-1.0
     gstreamer-rtsp-1.0
     gstreamer-rtsp-server-1.0
     gio-2.0
@@ -71,6 +76,17 @@ target_compile_definitions(camera-streamer PRIVATE
     APP_VERSION="${PROJECT_VERSION}"
 )
 target_link_libraries(camera-streamer PRIVATE PkgConfig::GST)
+
+if(ENABLE_SECURE_USB)
+    target_sources(camera-streamer PRIVATE
+        src/camera/secure/SecureRecord.cpp
+        src/camera/secure/KeySchedule.cpp
+        src/camera/secure/SecureUsbServer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureHandshake.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureWire.cpp)
+    target_link_libraries(camera-streamer PRIVATE OpenSSL::Crypto)
+    target_compile_definitions(camera-streamer PRIVATE ENABLE_SECURE_USB=1)
+endif()
 
 # --- install ---------------------------------------------------------------
 

@@ -23,6 +23,9 @@
 #include "camera/rtsp/RtspServer.h"
 #include "camera/update/SwupdateClient.h"
 #include "camera/update/UpdateServer.h"
+#ifdef ENABLE_SECURE_USB
+#include "camera/secure/SecureUsbServer.h"
+#endif
 #include "camera/lib/v4l2/V4l2Device.h"
 #include "camera/folly/Expected.h"
 #include "camera/folly/Unit.h"
@@ -66,6 +69,12 @@ private:
     std::unique_ptr<ControlServer> control_;
     std::unique_ptr<DiscoveryServer> discovery_;
     std::unique_ptr<UpdateServer> update_server_;
+    // transports=usb only: second instance on the CDC-NCM address, so
+    // firmware can still be pushed when the secure transport is broken.
+    std::unique_ptr<UpdateServer> update_recovery_;
+#ifdef ENABLE_SECURE_USB
+    std::unique_ptr<secure::SecureUsbServer> secure_usb_;
+#endif
 
     Watchdog watchdog_;
     folly::EventBase evb_;

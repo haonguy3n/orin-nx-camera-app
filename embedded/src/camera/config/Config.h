@@ -56,6 +56,29 @@ struct Config {
     // Switch at runtime by editing the file and sending SIGHUP
     // (systemctl reload camera-streamer).
     std::string listen = "all";
+    // Which transports carry video/control/update:
+    //   both     - network and secure USB at once (default)
+    //   network  - TCP only; the secure USB endpoint is not published
+    //   usb      - secure USB only
+    //
+    // "usb" serves the cameras straight from the encoder over USB and
+    // confines the TCP servers to 127.0.0.1, where the USB transport reaches
+    // control and update. The update server is the exception -- see
+    // recovery_update below.
+    //
+    // Distinct from `listen`, which selects *which network* the TCP servers
+    // use (its "usb" value means the CDC-NCM gadget network, not this).
+    std::string transports = "both";
+    // Recovery update channel.
+    //
+    // With transports=usb everything else is confined to loopback, so a
+    // secure USB transport that fails to come up would leave no way to push
+    // firmware -- the device would be unrecoverable in the field. When on
+    // (the default) the update server additionally binds the CDC-NCM gadget
+    // address, which rides the same physical cable, so a broken secure
+    // transport is still recoverable. Set off only where the update path is
+    // provided some other way.
+    bool recovery_update = true;
     // RTP transport(s) the RTSP server offers: tcp (interleaved in the
     // RTSP connection, default -- survives hosts that drop unsolicited
     // inbound UDP), udp, or all (client picks; gst clients prefer UDP).

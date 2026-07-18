@@ -4,6 +4,9 @@
 #include <QJsonObject>
 #include <QList>
 #include <QMainWindow>
+#include <memory>
+
+#include "secureusbbridge.h"
 #include <QStringList>
 #include <QUrl>
 
@@ -44,6 +47,8 @@ private:
     void restartPane(int index);
     QUrl streamUrl(int index) const;
     QString controlHost() const;
+    bool usesSecureUsb() const;
+    bool startSelectedTransport();
     void pollStatus();
     void pollUpdateStatus();
     void sendReboot();
@@ -58,6 +63,7 @@ private:
     QPushButton *m_connectButton = nullptr;
     QPushButton *m_discoverButton = nullptr;
     QMenu *m_discoverMenu = nullptr;
+    QComboBox *m_transportSelect = nullptr;
     QComboBox *m_cameraSelect = nullptr;
 
     // Video area.
@@ -80,6 +86,8 @@ private:
 
     // State.
     bool m_connected = false;
+    bool m_usingSecureUsb = false;
+    std::unique_ptr<SecureUsbBridge> m_secureUsbBridge;
     bool m_controlsPopulated = false;
     QList<int> m_cameraIndices;  // combo row -> actual camera index
     bool m_cameraListPopulated = false;

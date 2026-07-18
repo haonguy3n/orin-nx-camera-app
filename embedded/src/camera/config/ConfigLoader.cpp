@@ -111,6 +111,10 @@ Config FileConfigLoader::load() {
     cfg.listen = get_string(kf, "server", "listen", cfg.listen);
     if (cfg.listen.empty())
         cfg.listen = "all";
+    cfg.transports = get_choice(kf, "server", "transports", cfg.transports,
+                                {"both", "network", "usb"});
+    cfg.recovery_update =
+        get_bool(kf, "server", "recovery-update", cfg.recovery_update);
     cfg.control_port = get_int(kf, "server", "control-port", cfg.control_port);
     if (cfg.control_port < 0 || cfg.control_port > 65535) {
         XLOGF(WARN, "config: [server] control-port %d out of range (using %d)",

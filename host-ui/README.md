@@ -42,6 +42,38 @@ cmake --build host-ui/build
    then **Connect** to reconnect (or press Enter in the URL bar to reconnect
    immediately).
 
+### Transport selection
+
+The toolbar offers three connection modes:
+
+- **Auto** (default) starts the in-process secure USB bridge. If no secure USB
+  device is enumerated, it falls back to the normal CDC-NCM/ethernet address.
+  It does not fall back after a secure-device authentication failure.
+- **Network** always connects directly to the entered device address.
+- **Secure USB** requires the authenticated USB device and uses the local
+  proxy at `127.0.0.1`; no device IP is used for video or control.
+
+The secure transport pins the device certificate selected during pairing. A
+certificate mismatch is an authentication failure and never falls back to
+plaintext networking.
+
+Set `CAMERA_SECURE_USB_CERT` to the *path* of the paired device's certificate
+PEM before starting the viewer (an absolute path -- it is passed to `fopen`
+unexpanded, so `~` does not work). Copy it off the device once:
+
+```sh
+scp root@192.168.55.1:/etc/camera-streamer/tls/server.crt ~/.config/camera-viewer/device.crt
+CAMERA_SECURE_USB_CERT=$HOME/.config/camera-viewer/device.crt ./camera-viewer
+```
+
+The in-process bridge claims only the vendor interface. Video arrives as an
+encrypted H.265 elementary stream and is decoded in-process straight into the
+panes (no local RTSP hop); control and update are exposed as authenticated
+local proxies on 127.0.0.1 ports 8555 and 8557.
+
+Claiming the interface needs `70-camera-secure-usb.rules` installed into
+`/etc/udev/rules.d/`; without it libusb fails with `LIBUSB_ERROR_ACCESS`.
+
 ## Zero-build fallback
 
 `scripts/preview.sh [device-ip]` opens both streams without building anything:

@@ -8,12 +8,35 @@
 
 #include "camera/control/ControlServer.h"
 #include "camera/control/handlers/RegisterHandlers.h"
+#include "camera/lib/net/NetworkResolver.h"
+#include "camera/pipeline/PipelineBuilder.h"
 #include "camera/pipeline/SourceFactory.h"
 #include "camera/lib/v4l2/V4l2Factory.h"
 
 #include "camera/folly/logging/xlog.h"
 
 namespace camera {
+namespace {
+
+// The encode chain a source would use for RTSP, terminated at an appsink so
+// the secure USB transport gets the elementary stream straight from the
+// encoder.
+std::string usb_video_launch(ISourceFactory& factory, const CameraConfig& cam) {
+    auto source = factory.create(cam.source);
+    if (!source)
+        return {};
+    std::string launch = source->build_launch(cam);
+    // build_launch ends with the RTP payloader inside "( ... )"; swap that
+    // tail for the appsink one rather than duplicating the source setup.
+    const std::string rtp_tail = PipelineBuilder::nvenc_tail(cam);
+    const size_t at = launch.rfind(rtp_tail);
+    if (at == std::string::npos)
+        return {};
+    launch.replace(at, rtp_tail.size(), PipelineBuilder::appsink_tail(cam));
+    return launch;
+}
+
+}  // namespace
 
 Application::Application(std::string conf_path)
     : conf_path_(std::move(conf_path)),
@@ -24,6 +47,17 @@ Application::Application(std::string conf_path)
 }
 
 folly::Expected<folly::Unit, std::string> Application::start_servers() {
+    // transports=usb: the cameras are owned by the secure USB transport,
+    // which taps the encoder directly. No RTSP server, so nothing is
+    // payloaded to RTP and bounced through loopback just to be taken apart
+    // again. Control and update still bind, but only on 127.0.0.1, since the
+    // USB transport reaches them there.
+    const bool usb_only = config_.transports == "usb";
+    if (usb_only && config_.listen != "127.0.0.1") {
+        XLOGF(INFO, "transports=usb: cameras served over USB only, "
+                    "control/update on loopback");
+        config_.listen = "127.0.0.1";
+    }
     rtsp_ = std::make_unique<RtspServer>(config_, *source_factory_);
     rtsp_->set_stall_handler([]() {
         // Every camera is dead -- nothing left to serve. Hard exit, no
@@ -68,6 +102,11 @@ folly::Expected<folly::Unit, std::string> Application::start_servers() {
     }
 
     if (config_.update_port > 0) {
+        // The primary update listener stays on the servers' bound address --
+        // loopback under transports=usb, which is where the secure USB
+        // tunnel delivers Update-channel records. (An earlier version MOVED
+        // this to the NCM address in usb mode, which silently disconnected
+        // the tunnel's update path: its forwards target 127.0.0.1:8557.)
         update_server_ = std::make_unique<UpdateServer>(swupdate_, config_);
         if (auto r = update_server_->start(rtsp_->bound_address(),
                                            config_.update_port);
@@ -75,11 +114,65 @@ folly::Expected<folly::Unit, std::string> Application::start_servers() {
             XLOGF(WARN, "%s", r.error().c_str());
             update_server_.reset();  // non-fatal: streaming still works
         }
+        // Recovery path, in ADDITION: with transports=usb everything else is
+        // on loopback, so a secure transport that fails to come up would
+        // leave no way to push firmware. A second listener on the CDC-NCM
+        // gadget address rides the same physical cable and shares no code
+        // with the secure path.
+        if (usb_only && config_.recovery_update) {
+            const std::string ncm = NetworkResolver::resolve_listen("usb");
+            if (!ncm.empty()) {
+                update_recovery_ = std::make_unique<UpdateServer>(swupdate_, config_);
+                if (auto r = update_recovery_->start(ncm, config_.update_port); !r) {
+                    XLOGF(WARN, "update recovery channel: %s", r.error().c_str());
+                    update_recovery_.reset();
+                } else {
+                    XLOGF(INFO, "update: recovery channel on %s:%d",
+                          ncm.c_str(), config_.update_port);
+                }
+            } else {
+                XLOGF(WARN, "update: no CDC-NCM address for the recovery channel");
+            }
+        }
     }
+#ifdef ENABLE_SECURE_USB
+    if (config_.transports == "network") {
+        XLOGF(INFO, "transports=network: secure USB endpoint not published");
+    } else {
+        // Secure USB is additive. Failure to expose the optional FunctionFS
+        // interface must never take down the established NCM RTSP path.
+        // Direct encoder tap only when the RTSP server is not also driving
+        // the sensors: Argus permits a single consumer per camera.
+        std::vector<std::string> video_launch;
+        if (usb_only) {
+            for (int i = 0; i < Config::kNumCameras; ++i) {
+                video_launch.push_back(
+                    config_.cameras[i].enabled
+                        ? usb_video_launch(*source_factory_, config_.cameras[i])
+                        : std::string());
+            }
+        }
+        secure_usb_ = std::make_unique<secure::SecureUsbServer>(
+            config_.tls_cert.empty() ? "/etc/camera-streamer/tls/server.crt"
+                                     : config_.tls_cert,
+            config_.tls_key.empty() ? "/etc/camera-streamer/tls/server.key"
+                                    : config_.tls_key,
+            std::move(video_launch));
+        std::string secure_error;
+        if (!secure_usb_->start(&secure_error)) {
+            XLOGF(WARN, "secure-usb disabled: %s", secure_error.c_str());
+            secure_usb_.reset();
+        }
+    }
+#endif
     return folly::unit;
 }
 
 void Application::stop_servers() {
+#ifdef ENABLE_SECURE_USB
+    secure_usb_.reset();
+#endif
+    update_recovery_.reset();
     update_server_.reset();
     discovery_.reset();
     control_.reset();  // before rtsp: its context reaches into the Application

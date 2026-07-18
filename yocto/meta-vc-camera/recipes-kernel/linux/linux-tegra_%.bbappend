@@ -64,3 +64,15 @@ do_patch:append() {
 # while relinking it -> transient "Permission denied" in
 # do_compile_devicetree_overlays. Overlay compilation is cheap; serialize it.
 PARALLEL_MAKE:task-compile_devicetree_overlays = ""
+
+# The same relink races across tasks, which the line above cannot help with:
+# kernel.bbclass has "addtask compile_kernelmodules after do_compile" and
+# meta-tegra has "addtask compile_devicetree_overlays after do_compile", with
+# no ordering between the two, so bitbake runs both in the same build dir at
+# once. "make modules" pulls in prepare -> scripts -> scripts/dtc and relinks
+# dtc underneath the overlay task, which then execs it mid-write:
+#
+#   /bin/sh: line 1: ./scripts/dtc/dtc: Permission denied   (make Error 126)
+#
+# Order them instead of sharing the directory concurrently.
+addtask compile_devicetree_overlays after do_compile_kernelmodules

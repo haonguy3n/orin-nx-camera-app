@@ -1,0 +1,24 @@
+# Grant the logged-in desktop user access to the camera's secure USB interface.
+#
+# Without this, libusb_open() fails with LIBUSB_ERROR_ACCESS and the viewer
+# reports the secure USB device as found but unusable: /dev/bus/usb/* is
+# root-only by default.
+#
+# 1d6b:0104 is the generic "Linux Foundation multifunction composite gadget"
+# ID that usb-gadget.sh sets, so it is matched together with the product
+# string to avoid granting access to every Linux USB gadget on the host.
+#
+# The "70-" prefix is required, not cosmetic: /usr/lib/udev/rules.d/
+# 73-seat-late.rules is what turns the uaccess tag into an ACL
+# (RUN{builtin}+="uaccess"), and udev runs rule files in lexical order.  A
+# file numbered above 73 sets the tag after the builtin has already run, so
+# the device ends up tagged uaccess with no ACL granted and libusb still
+# fails with LIBUSB_ERROR_ACCESS.  Verify with:
+#   udevadm info -q all -p /sys/bus/usb/devices/<dev> | grep TAGS
+#   getfacl /dev/bus/usb/<bus>/<dev>     # must list a user:<you>:rw- entry
+#
+# Install with:
+#   sudo cp host-ui/70-camera-secure-usb.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger
+# then replug the camera.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d6b", ATTR{idProduct}=="0104", ATTR{product}=="VC MIPI dual IMX296 camera", TAG+="uaccess"
