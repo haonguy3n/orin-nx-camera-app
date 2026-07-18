@@ -4,22 +4,14 @@
 on-device face detection. The recipe **downloads it automatically** at build
 time (OpenCV Zoo, MIT-licensed, sha256-pinned) — nothing to place here by hand.
 
-## Enable it
+## Always shipped
 
-1. Build with the model included (in `local.conf`):
-   ```
-   CAMERA_FACE_MODEL = "1"
-   ```
-   The image then pulls in `camera-face-model`, which fetches
-   `face_detection_yunet_2023mar.onnx` and installs it to
-   `/usr/share/camera-streamer/face_detection_yunet.onnx`.
-2. On the device, turn detection on in `/etc/camera-streamer.conf`:
-   ```
-   [detect]
-   enabled=true
-   model=/usr/share/camera-streamer/face_detection_yunet.onnx
-   ```
-   then `systemctl restart camera-streamer`.
+The image always installs `camera-face-model` (see camera-image.bb), which
+fetches `face_detection_yunet_2023mar.onnx` at build time and installs it to
+`/usr/share/camera-streamer/face_detection_yunet.onnx`. camera-streamer
+auto-enables detection whenever that file is present -- no config switch. To
+turn it off, point `[detect] model=` at a nonexistent path (or remove the
+model from the image).
 
 Boxes are emitted over the secure-USB metadata channel and drawn by the viewer.
 

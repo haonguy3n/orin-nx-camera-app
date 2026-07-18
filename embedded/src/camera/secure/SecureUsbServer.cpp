@@ -288,9 +288,9 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         int& fd = message.channel == Channel::Control ? control_ : update_;
         const uint16_t port = message.channel == Channel::Control ? 8555 : 8557;
-        if (message.channel == Channel::Update)
-            XLOGF(INFO, "secure-usb: update: %zu bytes to local updater",
-                  message.payload.size());
+        // No per-record log here: this is the upload data path, so a .swu push
+        // is thousands of 64 KiB chunks -- it would flood the journal. OTA
+        // progress is tracked via get-update-status instead.
         // Two attempts with a fresh connection between: a held-open fd may be a
         // finished session's socket (EPIPE on write), and dropping this payload
         // on that would eat the first chunk of the next upload.

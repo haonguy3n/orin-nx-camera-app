@@ -374,10 +374,6 @@ struct SecureUsbBridge::Impl {
                         message.value().payload.size());
             }
             const auto &decoded = message.value();
-            // OTA responses are rare and worth seeing every time.
-            if (decoded.channel == camera::secure::Channel::Update)
-                fprintf(stderr, "secure-usb: update: %zu bytes from device\n",
-                        decoded.payload.size());
             if (decoded.channel == camera::secure::Channel::Video) {
                 if (decoded.stream < kCameras)
                     decoders[decoded.stream].push(decoded.stream,
