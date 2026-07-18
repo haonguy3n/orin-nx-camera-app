@@ -55,10 +55,17 @@ std::string PipelineBuilder::appsink_tail(const CameraConfig& cam) {
 }
 
 std::string PipelineBuilder::detect_branch(int width, int height) {
-    // NVMM -> CPU BGRx via nvvidconv, then BGR for OpenCV. Latest-frame only
-    // (max-buffers=1 drop=true): detection may lag encode, and stale frames
-    // are worthless. Named "detect" so Pipeline can find the appsink.
-    return "queue ! nvvidconv ! video/x-raw,format=BGRx"
+    // NVMM -> CPU BGRx via nvvidconv, then BGR for OpenCV. Named "detect" so
+    // Pipeline can find the appsink.
+    //
+    // leaky=downstream on this queue is essential, not cosmetic: without it a
+    // slow detector (YuNet warmup, inference) fills the queue and backpressures
+    // THROUGH THE TEE into the encode branch, stalling the video the host
+    // actually watches. Leaky drops old frames on this branch so detection is
+    // best-effort and can never block video. max-size-buffers=1 also keeps
+    // Argus NVMM buffers from being held here.
+    return "queue leaky=downstream max-size-buffers=1"
+           " ! nvvidconv ! video/x-raw,format=BGRx"
            " ! videoconvert ! video/x-raw,format=BGR"
            ",width=" + std::to_string(width) +
            ",height=" + std::to_string(height) +
