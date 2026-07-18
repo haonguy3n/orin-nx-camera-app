@@ -56,4 +56,7 @@ private:
     int m_framesSinceTick = 0;
     double m_fps = 0.0;
     bool m_live = false;
+    // False once stopped: a decoder worker can deliver a queued frame after
+    // stop(), which would otherwise re-latch the status to "playing".
+    bool m_active = false;
 };

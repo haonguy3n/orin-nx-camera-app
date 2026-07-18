@@ -85,10 +85,11 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
 
     connect(m_video->videoSink(), &QVideoSink::videoFrameChanged, this,
             [this](const QVideoFrame &frame) {
-                if (frame.isValid()) {
+                if (frame.isValid() && m_active) {
                     // Emitted from a decode worker thread; this slot runs on
                     // the GUI thread via a queued connection, so the counter
-                    // needs no lock.
+                    // needs no lock. The m_active guard drops frames that were
+                    // already queued when stop() ran.
                     ++m_framesSinceTick;
                     if (!m_live) {
                         m_live = true;
@@ -123,6 +124,7 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
 
 void VideoPane::start(const QUrl &url)
 {
+    m_active = true;
     m_player->stop();
     m_player->setSource(QUrl());
     m_player->setSource(url);
@@ -131,6 +133,7 @@ void VideoPane::start(const QUrl &url)
 
 void VideoPane::startExternal()
 {
+    m_active = true;
     m_player->stop();
     m_player->setSource(QUrl());
     setStatusText("waiting for frames…");
@@ -139,6 +142,7 @@ void VideoPane::startExternal()
 
 void VideoPane::stop()
 {
+    m_active = false;
     m_player->stop();
     m_player->setSource(QUrl());
     m_live = false;
