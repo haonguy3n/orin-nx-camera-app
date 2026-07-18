@@ -3,6 +3,7 @@
 #include <cstdio>
 
 #include <opencv2/core.hpp>
+#include <opencv2/dnn.hpp>  // cv::dnn::DNN_BACKEND_CUDA / DNN_TARGET_CUDA
 #include <opencv2/imgproc.hpp>
 #include <opencv2/objdetect/face.hpp>
 
