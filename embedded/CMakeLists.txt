@@ -23,8 +23,8 @@ pkg_check_modules(GST REQUIRED IMPORTED_TARGET
 
 # Tree layout follows folly/fboss: src/camera/ is the project dir
 # (fboss/fboss), src/camera/lib/ holds low-level device/system access
-# (fboss/lib), src/camera/folly/ holds vendored folly mimics with tests in
-# src/camera/folly/test/ (folly layout).
+# (fboss/lib), src/camera/base/ holds the project base library (vendored
+# folly-API mimics, GLib-backed) with tests in src/camera/base/test/.
 add_executable(camera-streamer
     # core
     src/camera/Main.cpp
@@ -36,8 +36,8 @@ add_executable(camera-streamer
     src/camera/lib/net/NetworkResolver.cpp
     src/camera/lib/v4l2/V4l2Device.cpp
     # folly mimics with .cpp implementations (GLib-backed)
-    src/camera/folly/io/async/AsyncServerSocket.cpp
-    src/camera/folly/io/async/SSLContext.cpp
+    src/camera/base/io/async/AsyncServerSocket.cpp
+    src/camera/base/io/async/SSLContext.cpp
     # pipeline
     src/camera/pipeline/PipelineBuilder.cpp
     src/camera/pipeline/ArgusSource.cpp

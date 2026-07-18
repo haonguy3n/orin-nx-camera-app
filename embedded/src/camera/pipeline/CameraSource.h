@@ -17,17 +17,17 @@
 #include <string>
 
 #include "camera/config/Config.h"
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
 
 namespace camera {
 
 class IStreamController;  // from core/StreamController.h
 class IV4l2DeviceFactory; // from lib/v4l2/V4l2Device.h
 
-// Result of a runtime setting application: folly::unit on success,
+// Result of a runtime setting application: camera::base::unit on success,
 // error message on failure.
-using SourceResult = folly::Expected<folly::Unit, std::string>;
+using SourceResult = camera::base::Expected<camera::base::Unit, std::string>;
 
 class ICameraSource {
 public:

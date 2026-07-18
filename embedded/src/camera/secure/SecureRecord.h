@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "camera/folly/Expected.h"
+#include "camera/base/Expected.h"
 
 namespace camera::secure {
 
@@ -18,9 +18,9 @@ public:
 
     SecureRecord(Key key, Iv iv);
 
-    folly::Expected<std::vector<uint8_t>, std::string> seal(
+    camera::base::Expected<std::vector<uint8_t>, std::string> seal(
         const uint8_t* plaintext, size_t length);
-    folly::Expected<std::vector<uint8_t>, std::string> open(
+    camera::base::Expected<std::vector<uint8_t>, std::string> open(
         const uint8_t* ciphertext_and_tag, size_t length);
 
 private:

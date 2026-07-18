@@ -4,8 +4,8 @@
 
 #include <cstring>
 
-#include "camera/folly/ScopeGuard.h"
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/ScopeGuard.h"
+#include "camera/base/logging/xlog.h"
 #include "proto/Protocol.h"
 
 namespace camera {

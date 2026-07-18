@@ -22,7 +22,7 @@
 #include <utility>
 #include <variant>
 
-namespace folly {
+namespace camera::base {
 
 template <class Error>
 class Unexpected {
@@ -92,4 +92,4 @@ private:
     std::variant<Value, Error> storage_;
 };
 
-}  // namespace folly
+}  // namespace camera::base

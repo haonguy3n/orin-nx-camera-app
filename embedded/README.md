@@ -236,7 +236,7 @@ src/camera/discovery/
 src/camera/update/
   SwupdateClient.{h,cpp}           swupdate IPC: streaming install + progress polling
   UpdateServer.{h,cpp}             TCP(+TLS) .swu upload server (port 8557)
-src/camera/folly/                  Vendored folly-mimic support library (see below)
+src/camera/base/                  Project base library (vendored folly-API mimics) (see below)
 ../common/proto/Protocol.h         Ports/methods/error-code constants shared with host-ui
 config/                            default + videotestsrc test configs
 systemd/                           camera-streamer.service + first-boot TLS cert unit
@@ -249,7 +249,7 @@ semantics, reimplemented on top of what is already on the device (GLib/GIO),
 **not** a dependency on upstream folly:
 
 ```
-src/camera/folly/
+src/camera/base/
   Expected.h                       folly::Expected<T, Err> + makeUnexpected
   File.h                           Move-only RAII fd
   FileUtil.h                       readFull/writeFull (EINTR-safe)

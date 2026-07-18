@@ -7,7 +7,7 @@
  *
  * Folly API kept: loadCertKeyPairFromFiles(), loadTrustedCertificates(),
  * setVerificationOption(VerifyClientCertificate). Adapted: errors return
- * folly::Expected instead of throwing. Extensions for the GLib backend:
+ * camera::base::Expected instead of throwing. Extensions for the GLib backend:
  * create() (config paths -> ready context), enabled(), and
  * wrapServerConnection() (folly hands out SSL*; our unit of I/O is the
  * GIOStream).
@@ -26,10 +26,10 @@
 #include <string>
 #include <utility>
 
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
 
-namespace folly {
+namespace camera::base {
 
 class SSLContext {
 public:
@@ -90,4 +90,4 @@ private:
     VerifyClientCertificate verify_ = VerifyClientCertificate::DO_NOT_REQUEST;
 };
 
-}  // namespace folly
+}  // namespace camera::base

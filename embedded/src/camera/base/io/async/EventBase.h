@@ -16,7 +16,7 @@
 #include <functional>
 #include <utility>
 
-namespace folly {
+namespace camera::base {
 
 class EventBase {
 public:
@@ -60,4 +60,4 @@ private:
     GMainLoop* loop_;
 };
 
-}  // namespace folly
+}  // namespace camera::base

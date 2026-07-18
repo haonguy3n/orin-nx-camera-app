@@ -6,7 +6,7 @@
 
 #include "camera/lib/net/NetworkResolver.h"
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 
@@ -56,10 +56,10 @@ RtspServer::~RtspServer() {
     // mounts_ unique_ptrs clean up themselves.
 }
 
-folly::Expected<folly::Unit, std::string> RtspServer::start() {
+camera::base::Expected<camera::base::Unit, std::string> RtspServer::start() {
     address_ = NetworkResolver::resolve_listen(config_.listen);
     if (address_.empty()) {
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             "listen=" + config_.listen +
             ": no usable IPv4 address (interface down or no address yet?)");
     }
@@ -109,7 +109,7 @@ folly::Expected<folly::Unit, std::string> RtspServer::start() {
     g_object_unref(mounts);
 
     if (enabled == 0) {
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             std::string("no cameras enabled, nothing to serve"));
     }
 
@@ -131,7 +131,7 @@ folly::Expected<folly::Unit, std::string> RtspServer::start() {
 
     attach_id_ = gst_rtsp_server_attach(server_, nullptr);
     if (attach_id_ == 0) {
-        return folly::makeUnexpected("failed to attach RTSP server on " +
+        return camera::base::makeUnexpected("failed to attach RTSP server on " +
                                      address_ + ":" +
                                      std::to_string(config_.port));
     }
@@ -140,7 +140,7 @@ folly::Expected<folly::Unit, std::string> RtspServer::start() {
     XLOGF(INFO, "RTSP server listening on rtsp://%s:%d (listen=%s, %d stream%s)",
               address_.c_str(), config_.port, config_.listen.c_str(), enabled,
               enabled == 1 ? "" : "s");
-    return folly::unit;
+    return camera::base::unit;
 }
 
 gboolean RtspServer::on_watchdog(gpointer user_data) {

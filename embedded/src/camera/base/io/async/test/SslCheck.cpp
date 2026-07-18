@@ -1,8 +1,8 @@
-// Loopback check for folly::SSLContext (the "secure USB" channel wrapper).
+// Loopback check for camera::base::SSLContext (the "secure USB" channel wrapper).
 // Requires the GIO TLS backend (glib-networking) and the openssl CLI.
 // Run from embedded/ (one line):
-//   g++ -std=c++17 -Wall -Wextra -I src src/camera/folly/io/async/SSLContext.cpp
-//   src/camera/folly/io/async/test/SslCheck.cpp $(pkg-config --cflags --libs
+//   g++ -std=c++17 -Wall -Wextra -I src src/camera/base/io/async/SSLContext.cpp
+//   src/camera/base/io/async/test/SslCheck.cpp $(pkg-config --cflags --libs
 //   gio-2.0) -o /tmp/ssl_check && /tmp/ssl_check
 #include <gio/gio.h>
 
@@ -11,7 +11,7 @@
 #include <string>
 #include <thread>
 
-#include "camera/folly/io/async/SSLContext.h"
+#include "camera/base/io/async/SSLContext.h"
 
 namespace {
 
@@ -52,10 +52,10 @@ int main() {
                       .c_str()) == 0);
 
     // Unconfigured -> disabled; half-configured -> hard error.
-    auto off = folly::SSLContext::create("", "", "");
+    auto off = camera::base::SSLContext::create("", "", "");
     assert(off.hasValue() && !off->enabled());
-    assert(!folly::SSLContext::create(crt, "", "").hasValue());
-    assert(!folly::SSLContext::create(crt, key, dir + "/nope.crt").hasValue());
+    assert(!camera::base::SSLContext::create(crt, "", "").hasValue());
+    assert(!camera::base::SSLContext::create(crt, key, dir + "/nope.crt").hasValue());
 
     GSocketListener* listener = g_socket_listener_new();
     GError* err = nullptr;
@@ -64,7 +64,7 @@ int main() {
     assert(port != 0);
 
     // Case A: server TLS on, no client auth — data round-trips encrypted.
-    auto ctx = folly::SSLContext::create(crt, key, "");
+    auto ctx = camera::base::SSLContext::create(crt, key, "");
     assert(ctx.hasValue() && ctx->enabled());
     std::thread server_a([&] {
         GSocketConnection* sc =
@@ -99,7 +99,7 @@ int main() {
 
     // Case B: mTLS required, client presents no certificate — the server
     // must reject the handshake and never see application data.
-    auto mctx = folly::SSLContext::create(crt, key, crt);
+    auto mctx = camera::base::SSLContext::create(crt, key, crt);
     assert(mctx.hasValue() && mctx->enabled());
     bool server_saw_data = false;
     std::thread server_b([&] {

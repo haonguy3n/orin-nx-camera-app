@@ -13,7 +13,7 @@
 #include "camera/pipeline/SourceFactory.h"
 #include "camera/lib/v4l2/V4l2Factory.h"
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 namespace {
@@ -46,7 +46,7 @@ Application::Application(std::string conf_path)
     register_all_handlers(registry_);
 }
 
-folly::Expected<folly::Unit, std::string> Application::start_servers() {
+camera::base::Expected<camera::base::Unit, std::string> Application::start_servers() {
     // transports=usb: the cameras are owned by the secure USB transport,
     // which taps the encoder directly. No RTSP server, so nothing is
     // payloaded to RTP and bounced through loopback just to be taken apart
@@ -175,7 +175,7 @@ folly::Expected<folly::Unit, std::string> Application::start_servers() {
         }
     }
 #endif
-    return folly::unit;
+    return camera::base::unit;
 }
 
 void Application::stop_servers() {
@@ -189,7 +189,7 @@ void Application::stop_servers() {
     rtsp_.reset();
 }
 
-folly::Expected<folly::Unit, std::string> Application::start() {
+camera::base::Expected<camera::base::Unit, std::string> Application::start() {
     config_ = config_loader_->load();
     return start_servers();
 }

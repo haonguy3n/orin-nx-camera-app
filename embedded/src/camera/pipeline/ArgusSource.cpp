@@ -50,7 +50,7 @@ SourceResult ArgusSource::set_exposure(int cam_index, CameraConfig& cam, int us,
     stream.set_source_property(cam_index, "exposuretimerange", range.c_str());
     cam.exposure = us;
     stream.refresh_launch(cam_index);
-    return folly::unit;
+    return camera::base::unit;
 }
 
 SourceResult ArgusSource::set_gain(int cam_index, CameraConfig& cam, double gain,
@@ -66,12 +66,12 @@ SourceResult ArgusSource::set_gain(int cam_index, CameraConfig& cam, double gain
     stream.set_source_property(cam_index, "gainrange", range.c_str());
     cam.gain = gain;
     stream.refresh_launch(cam_index);
-    return folly::unit;
+    return camera::base::unit;
 }
 
 SourceResult ArgusSource::set_trigger(CameraConfig& /*cam*/, int /*mode*/,
                                       IV4l2DeviceFactory& /*v4l2*/) const {
-    return folly::makeUnexpected(std::string("hardware trigger requires the v4l2 source "
+    return camera::base::makeUnexpected(std::string("hardware trigger requires the v4l2 source "
                    "(current source 'argus')"));
 }
 
@@ -82,14 +82,14 @@ SourceResult ArgusSource::set_isp(int cam_index, CameraConfig& cam,
     if (value.empty()) {
         cam.isp.erase(param);
         stream.refresh_launch(cam_index);
-        return folly::unit;
+        return camera::base::unit;
     }
     cam.isp[param] = value;
     // Live pipeline picks it up now; the refreshed factory launch string
     // covers every session created afterwards.
     stream.set_source_property(cam_index, param.c_str(), value.c_str());
     stream.refresh_launch(cam_index);
-    return folly::unit;
+    return camera::base::unit;
 }
 
 }  // namespace camera

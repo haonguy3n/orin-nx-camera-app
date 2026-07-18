@@ -7,7 +7,7 @@
 
 #include "camera/control/JsonUtil.h"
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 
@@ -62,10 +62,10 @@ HandlerResult RebootHandler::handle(JsonObject* /*params*/, ControlContext& /*ct
 HandlerResult SetStreamHandler::handle(JsonObject* params, ControlContext& ctx) {
     auto cam_idx = require_camera(params);
     if (!cam_idx)
-        return folly::makeUnexpected(cam_idx.error());
+        return camera::base::makeUnexpected(cam_idx.error());
     bool enabled = true;
     if (!param_bool(params, "enabled", &enabled))
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             ControlError{kInvalidParams, "enabled must be a boolean"});
     ctx.config.cameras[*cam_idx].enabled = enabled;
     if (ctx.notify_stream)

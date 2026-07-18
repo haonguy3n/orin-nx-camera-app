@@ -7,7 +7,7 @@
 #include "camera/core/StreamController.h"
 #include "camera/pipeline/PipelineBuilder.h"
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 
@@ -55,11 +55,11 @@ SourceResult V4l2Source::set_exposure(int /*cam_index*/, CameraConfig& cam,
                                       IStreamController& /*stream*/) const {
     auto dev = v4l2_factory_.open(cam.device);
     if (!dev)
-        return folly::makeUnexpected(cam.device + ": cannot open device");
+        return camera::base::makeUnexpected(cam.device + ": cannot open device");
     if (us == 0) {  // 0 = back to the driver default
         auto c = dev->get_control("exposure");
         if (!c)
-            return folly::makeUnexpected(std::move(c.error()));
+            return camera::base::makeUnexpected(std::move(c.error()));
         if (auto r = dev->set_control("exposure", c->default_value); !r)
             return r;
     } else {
@@ -67,7 +67,7 @@ SourceResult V4l2Source::set_exposure(int /*cam_index*/, CameraConfig& cam,
             return r;
     }
     cam.exposure = us;
-    return folly::unit;
+    return camera::base::unit;
 }
 
 SourceResult V4l2Source::set_gain(int /*cam_index*/, CameraConfig& cam,
@@ -75,11 +75,11 @@ SourceResult V4l2Source::set_gain(int /*cam_index*/, CameraConfig& cam,
                                   IStreamController& /*stream*/) const {
     auto dev = v4l2_factory_.open(cam.device);
     if (!dev)
-        return folly::makeUnexpected(cam.device + ": cannot open device");
+        return camera::base::makeUnexpected(cam.device + ": cannot open device");
     if (gain == 0) {  // 0 = back to the driver default
         auto c = dev->get_control("gain");
         if (!c)
-            return folly::makeUnexpected(std::move(c.error()));
+            return camera::base::makeUnexpected(std::move(c.error()));
         if (auto r = dev->set_control("gain", c->default_value); !r)
             return r;
     } else {
@@ -88,25 +88,25 @@ SourceResult V4l2Source::set_gain(int /*cam_index*/, CameraConfig& cam,
             return r;
     }
     cam.gain = gain;
-    return folly::unit;
+    return camera::base::unit;
 }
 
 SourceResult V4l2Source::set_trigger(CameraConfig& cam, int mode,
                                      IV4l2DeviceFactory& v4l2) const {
     auto dev = v4l2.open(cam.device);
     if (!dev)
-        return folly::makeUnexpected(cam.device + ": cannot open device");
+        return camera::base::makeUnexpected(cam.device + ": cannot open device");
     if (auto r = dev->set_trigger_mode(mode); !r)
         return r;
     cam.trigger = mode;
-    return folly::unit;
+    return camera::base::unit;
 }
 
 SourceResult V4l2Source::set_isp(int /*cam_index*/, CameraConfig& /*cam*/,
                                  const std::string& /*param*/,
                                  const std::string& /*value*/,
                                  IStreamController& /*stream*/) const {
-    return folly::makeUnexpected(std::string(
+    return camera::base::makeUnexpected(std::string(
         "ISP controls require the argus source (current source 'v4l2')"));
 }
 

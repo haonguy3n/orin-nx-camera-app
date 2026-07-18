@@ -11,7 +11,7 @@
 
 #include <glib.h>
 
-namespace folly {
+namespace camera::base {
 namespace detail {
 
 /// Compile-time-capable basename: folly logs "file.cpp:123", not the
@@ -26,7 +26,7 @@ constexpr const char* xlogBasename(const char* path) {
 }
 
 }  // namespace detail
-}  // namespace folly
+}  // namespace camera::base
 
 // folly level -> GLib level. FATAL maps to G_LOG_LEVEL_ERROR, which
 // aborts the process — matching folly's XLOGF(FATAL) semantics.
@@ -40,5 +40,5 @@ constexpr const char* xlogBasename(const char* path) {
 ///     XLOGF(INFO, "streamed %lld bytes", total);
 #define XLOGF(level, fmt, ...)                                          \
     g_log(G_LOG_DOMAIN, XLOG_LEVEL_##level, "[%s:%d] " fmt,             \
-          ::folly::detail::xlogBasename(__FILE__), __LINE__,            \
+          ::camera::base::detail::xlogBasename(__FILE__), __LINE__,            \
           ##__VA_ARGS__)

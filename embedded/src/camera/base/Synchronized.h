@@ -19,7 +19,7 @@
 #include <shared_mutex>
 #include <utility>
 
-namespace folly {
+namespace camera::base {
 
 /// Couples data with the mutex that guards it. The data is reachable
 /// only through a held lock, so unsynchronized access won't compile.
@@ -74,4 +74,4 @@ private:
     T data_;
 };
 
-}  // namespace folly
+}  // namespace camera::base

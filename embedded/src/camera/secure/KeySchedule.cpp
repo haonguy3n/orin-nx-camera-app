@@ -4,7 +4,7 @@
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
 namespace camera::secure {
-folly::Expected<SessionKeys, std::string> derive_session_keys(
+camera::base::Expected<SessionKeys, std::string> derive_session_keys(
     const std::array<uint8_t, 32>& shared_secret,
     const std::array<uint8_t, 32>& host_nonce,
     const std::array<uint8_t, 32>& device_nonce) {
@@ -14,7 +14,7 @@ folly::Expected<SessionKeys, std::string> derive_session_keys(
 
     EVP_PKEY_CTX* raw_context = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
     if (raw_context == nullptr)
-        return folly::makeUnexpected(std::string("HKDF context creation failed"));
+        return camera::base::makeUnexpected(std::string("HKDF context creation failed"));
     auto context = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>(
         raw_context, EVP_PKEY_CTX_free);
 
@@ -31,7 +31,7 @@ folly::Expected<SessionKeys, std::string> derive_session_keys(
             sizeof(kInfo) - 1) <= 0 ||
         EVP_PKEY_derive(raw_context, material.data(), &material_length) <= 0 ||
         material_length != material.size()) {
-        return folly::makeUnexpected(std::string("HKDF-SHA256 derivation failed"));
+        return camera::base::makeUnexpected(std::string("HKDF-SHA256 derivation failed"));
     }
 
     SessionKeys keys{};

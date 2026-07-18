@@ -7,7 +7,7 @@
  * Folly API kept: bind(), addAcceptCallback(), startAccepting().
  * Adapted: the accept callback receives the GSocketConnection* (the
  * platform connection type) instead of a raw fd, bind() takes an
- * explicit address and returns folly::Expected instead of throwing.
+ * explicit address and returns camera::base::Expected instead of throwing.
  * Dropped: multiple callbacks/event bases, connection queueing, pause —
  * add when a caller appears.
  */
@@ -18,10 +18,10 @@
 #include <functional>
 #include <string>
 
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
 
-namespace folly {
+namespace camera::base {
 
 class AsyncServerSocket {
 public:
@@ -54,4 +54,4 @@ private:
     AcceptCallback callback_;
 };
 
-}  // namespace folly
+}  // namespace camera::base

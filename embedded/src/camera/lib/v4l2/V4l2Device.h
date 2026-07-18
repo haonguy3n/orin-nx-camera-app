@@ -13,8 +13,8 @@
 #include <string>
 #include <vector>
 
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
 
 namespace camera {
 
@@ -32,34 +32,34 @@ struct V4l2Control {
 };
 
 // Interface for one V4L2 device node (/dev/videoN). All operations
-// return folly::Expected: the value on success, an error message on
+// return camera::base::Expected: the value on success, an error message on
 // failure (device missing, not a V4L2 device, unknown control, ...).
 class IV4l2Device {
 public:
     virtual ~IV4l2Device() = default;
 
     // Every non-disabled scalar control the device exposes.
-    virtual folly::Expected<std::vector<V4l2Control>, std::string>
+    virtual camera::base::Expected<std::vector<V4l2Control>, std::string>
     list_controls() = 0;
 
     // |control| is a control name (matched case-insensitively, with space,
     // '_' and '-' treated as equal -- "trigger_mode" matches "Trigger Mode")
     // or a numeric id (decimal or 0x-prefixed hex).
-    virtual folly::Expected<V4l2Control, std::string> get_control(
+    virtual camera::base::Expected<V4l2Control, std::string> get_control(
         const std::string& control) = 0;
-    virtual folly::Expected<folly::Unit, std::string> set_control(
+    virtual camera::base::Expected<camera::base::Unit, std::string> set_control(
         const std::string& control, int64_t value) = 0;
 
     // Sets the VC MIPI hardware trigger mode (0 = disabled .. 7 = stream
     // level). Finds the driver's control by name ("trigger_mode" on the VC
     // driver; falls back to the first non-button control containing
     // "trigger").
-    virtual folly::Expected<folly::Unit, std::string> set_trigger_mode(
+    virtual camera::base::Expected<camera::base::Unit, std::string> set_trigger_mode(
         int mode) = 0;
 
     // Presses the VC driver's software "single trigger" button control
     // (exposes one frame when the sensor is in a software-triggerable mode).
-    virtual folly::Expected<folly::Unit, std::string> fire_single_trigger() = 0;
+    virtual camera::base::Expected<camera::base::Unit, std::string> fire_single_trigger() = 0;
 };
 
 // Interface for creating IV4l2Device instances by device path.

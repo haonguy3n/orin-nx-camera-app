@@ -1,6 +1,6 @@
-#include "camera/folly/io/async/SSLContext.h"
+#include "camera/base/io/async/SSLContext.h"
 
-namespace folly {
+namespace camera::base {
 
 namespace {
 
@@ -91,4 +91,4 @@ Expected<GIOStream*, std::string> SSLContext::wrapServerConnection(
     return tls;
 }
 
-}  // namespace folly
+}  // namespace camera::base

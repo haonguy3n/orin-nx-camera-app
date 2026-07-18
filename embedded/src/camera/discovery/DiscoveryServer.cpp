@@ -4,7 +4,7 @@
 
 #include <string>
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 #include "proto/Protocol.h"
 
 namespace camera {
@@ -86,14 +86,14 @@ DiscoveryServer::~DiscoveryServer() {
     }
 }
 
-folly::Expected<folly::Unit, std::string> DiscoveryServer::start() {
+camera::base::Expected<camera::base::Unit, std::string> DiscoveryServer::start() {
     GError* err = nullptr;
     socket_ = g_socket_new(G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_DATAGRAM,
                            G_SOCKET_PROTOCOL_UDP, &err);
     if (socket_ == nullptr) {
         std::string msg = std::string("discovery: socket: ") + err->message;
         g_error_free(err);
-        return folly::makeUnexpected(std::move(msg));
+        return camera::base::makeUnexpected(std::move(msg));
     }
 
     GInetAddress* any = g_inet_address_new_any(G_SOCKET_FAMILY_IPV4);
@@ -107,7 +107,7 @@ folly::Expected<folly::Unit, std::string> DiscoveryServer::start() {
                           std::to_string(config_.discovery_port) +
                           "/udp failed: " + err->message;
         g_error_free(err);
-        return folly::makeUnexpected(std::move(msg));
+        return camera::base::makeUnexpected(std::move(msg));
     }
 
     source_ = g_socket_create_source(socket_, G_IO_IN, nullptr);
@@ -115,7 +115,7 @@ folly::Expected<folly::Unit, std::string> DiscoveryServer::start() {
     g_source_attach(source_, nullptr);
 
     XLOGF(INFO, "discovery responder on 0.0.0.0:%d/udp", config_.discovery_port);
-    return folly::unit;
+    return camera::base::unit;
 }
 
 gboolean DiscoveryServer::on_datagram(GSocket* socket, GIOCondition /*cond*/,

@@ -27,9 +27,9 @@
 #include "camera/secure/SecureUsbServer.h"
 #endif
 #include "camera/lib/v4l2/V4l2Device.h"
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
-#include "camera/folly/io/async/EventBase.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
+#include "camera/base/io/async/EventBase.h"
 
 namespace camera {
 
@@ -39,7 +39,7 @@ public:
 
     // Loads config and starts all servers. Returns the failure reason on
     // error (main logs it; systemd Restart=on-failure retries).
-    folly::Expected<folly::Unit, std::string> start();
+    camera::base::Expected<camera::base::Unit, std::string> start();
 
     // Runs the GMainLoop. Returns the process exit code.
     int run();
@@ -48,7 +48,7 @@ public:
     void reload();
 
 private:
-    folly::Expected<folly::Unit, std::string> start_servers();
+    camera::base::Expected<camera::base::Unit, std::string> start_servers();
     void stop_servers();
 
     static gboolean on_signal(gpointer user_data);
@@ -77,7 +77,7 @@ private:
 #endif
 
     Watchdog watchdog_;
-    folly::EventBase evb_;
+    camera::base::EventBase evb_;
     int exit_code_ = 0;
 };
 

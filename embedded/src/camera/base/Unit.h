@@ -13,7 +13,7 @@
  */
 #pragma once
 
-namespace folly {
+namespace camera::base {
 
 struct Unit {
     constexpr bool operator==(const Unit& /*other*/) const { return true; }
@@ -22,4 +22,4 @@ struct Unit {
 
 constexpr Unit unit{};
 
-}  // namespace folly
+}  // namespace camera::base

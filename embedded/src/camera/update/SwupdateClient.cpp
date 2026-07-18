@@ -14,9 +14,9 @@
 #include <cstring>
 #include <thread>
 
-#include "camera/folly/File.h"
-#include "camera/folly/FileUtil.h"
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/File.h"
+#include "camera/base/FileUtil.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 
@@ -153,11 +153,11 @@ struct ipc_message {
 /// Connects to a Unix domain socket, trying |paths| in order. Returns an
 /// owning File on success, an empty File on failure. |quiet| suppresses
 /// the per-connect log (used for status polling).
-folly::File connect_unix_socket(const char* const* paths, int num_paths,
+camera::base::File connect_unix_socket(const char* const* paths, int num_paths,
                                 bool quiet = false) {
     for (int i = 0; i < num_paths; ++i) {
         const char* path = paths[i];
-        folly::File fd(socket(AF_UNIX, SOCK_STREAM, 0), /*ownsFd=*/true);
+        camera::base::File fd(socket(AF_UNIX, SOCK_STREAM, 0), /*ownsFd=*/true);
         if (!fd) {
             XLOGF(WARN, "swupdate: socket(): %s", strerror(errno));
             continue;
@@ -181,11 +181,11 @@ folly::File connect_unix_socket(const char* const* paths, int num_paths,
     }
     XLOGF(WARN, "swupdate: cannot connect to any socket (tried %d paths)",
               num_paths);
-    return folly::File();
+    return camera::base::File();
 }
 
 /// Connects to the swupdate IPC control socket (empty File on failure).
-folly::File connect_swupdate_socket(bool quiet = false) {
+camera::base::File connect_swupdate_socket(bool quiet = false) {
     return connect_unix_socket(kSwupdateSocketPaths, kNumSocketPaths, quiet);
 }
 
@@ -202,7 +202,7 @@ bool write_all(int fd, const void* buf, size_t len) {
 /// Reads exactly |len| bytes from fd. Returns true on success, false on
 /// error or EOF (logged).
 bool read_all(int fd, void* buf, size_t len) {
-    ssize_t n = folly::readFull(fd, buf, len);
+    ssize_t n = camera::base::readFull(fd, buf, len);
     if (n < 0) {
         XLOGF(WARN, "swupdate: read: %s", strerror(errno));
         return false;
@@ -217,11 +217,11 @@ bool read_all(int fd, void* buf, size_t len) {
 /// Sends REQ_INSTALL and waits for ACK/NACK. Returns the connected fd
 /// (owning) on ACK, an empty File on NACK or error. After ACK, the
 /// caller streams the image on this fd.
-folly::File request_install() {
-    folly::File fd = connect_swupdate_socket();
+camera::base::File request_install() {
+    camera::base::File fd = connect_swupdate_socket();
     if (!fd) {
         XLOGF(WARN, "swupdate: request_install: no socket connection");
-        return folly::File();
+        return camera::base::File();
     }
 
     XLOGF(INFO, "swupdate: sending REQ_INSTALL (magic=0x%08x, sizeof(ipc_message)=%zu)",
@@ -237,13 +237,13 @@ folly::File request_install() {
 
     if (!write_all(fd.fd(), &msg, sizeof(msg))) {
         XLOGF(WARN, "swupdate: request_install: write failed");
-        return folly::File();
+        return camera::base::File();
     }
 
     XLOGF(INFO, "swupdate: waiting for ACK...");
     if (!read_all(fd.fd(), &msg, sizeof(msg))) {
         XLOGF(WARN, "swupdate: request_install: read ACK failed");
-        return folly::File();
+        return camera::base::File();
     }
 
     XLOGF(INFO, "swupdate: response type=%d, magic=0x%08x", msg.type, msg.magic);
@@ -257,12 +257,12 @@ folly::File request_install() {
         nack_msg[128] = '\0';
         XLOGF(WARN, "swupdate: install request NACK: %s",
                   nack_msg[0] ? nack_msg : "rejected (check apiversion)");
-        return folly::File();
+        return camera::base::File();
     }
     if (msg.type != kAck) {
         XLOGF(WARN, "swupdate: unexpected response type %d (expected ACK=%d)",
                   msg.type, kAck);
-        return folly::File();
+        return camera::base::File();
     }
 
     XLOGF(INFO, "swupdate: REQ_INSTALL ACKed, ready to stream (fd=%d)", fd.fd());
@@ -270,11 +270,11 @@ folly::File request_install() {
 }
 
 /// Polls swupdate for status via GET_STATUS on the control socket.
-folly::Expected<UpdateStatus, std::string> poll_status() {
+camera::base::Expected<UpdateStatus, std::string> poll_status() {
     // quiet connect — called every second
-    folly::File fd = connect_swupdate_socket(true);
+    camera::base::File fd = connect_swupdate_socket(true);
     if (!fd)
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             std::string("cannot connect to swupdate IPC"));
 
     ipc_message msg;
@@ -283,9 +283,9 @@ folly::Expected<UpdateStatus, std::string> poll_status() {
     msg.type = kGetStatus;
 
     if (!write_all(fd.fd(), &msg, sizeof(msg)))
-        return folly::makeUnexpected(std::string("GET_STATUS write failed"));
+        return camera::base::makeUnexpected(std::string("GET_STATUS write failed"));
     if (!read_all(fd.fd(), &msg, sizeof(msg)))
-        return folly::makeUnexpected(std::string("GET_STATUS read failed"));
+        return camera::base::makeUnexpected(std::string("GET_STATUS read failed"));
     fd.close();
 
     UpdateStatus out;
@@ -415,14 +415,14 @@ void SwupdateClient::run_install(const std::string& path) {
 
     // Try the IPC socket approach first (preferred: streams directly,
     // gives us status feedback).
-    folly::File ipc = request_install();
+    camera::base::File ipc = request_install();
     if (ipc) {
         // Stream the file to swupdate. Both Files must be closed before
         // poll_completion(): swupdate needs the write side closed to
         // finish reading the CPIO — hence the inner scope.
         {
-            folly::File swu = std::move(ipc);
-            folly::File src(open(path.c_str(), O_RDONLY), /*ownsFd=*/true);
+            camera::base::File swu = std::move(ipc);
+            camera::base::File src(open(path.c_str(), O_RDONLY), /*ownsFd=*/true);
             if (!src) {
                 XLOGF(ERR, "swupdate: open(%s): %s", path.c_str(),
                            strerror(errno));
@@ -433,7 +433,7 @@ void SwupdateClient::run_install(const std::string& path) {
             char buf[65536];
             ssize_t n;
             ssize_t total = 0;
-            while ((n = folly::readFull(src.fd(), buf, sizeof(buf))) > 0) {
+            while ((n = camera::base::readFull(src.fd(), buf, sizeof(buf))) > 0) {
                 if (write_full_nosigpipe(swu.fd(), buf, n) < 0) {
                     XLOGF(ERR, "swupdate: write to IPC: %s",
                                strerror(errno));
@@ -472,7 +472,7 @@ void SwupdateClient::poll_completion() {
     // that pushes progress_msg updates to connected clients. Unlike GET_STATUS
     // on the control socket (which blocks during CPIO streaming), the progress
     // socket is always responsive.
-    folly::File progress =
+    camera::base::File progress =
         connect_unix_socket(kProgressSocketPaths, kNumProgressSocketPaths);
     if (!progress) {
         XLOGF(ERR, "swupdate: cannot connect to progress socket, "
@@ -684,17 +684,17 @@ void SwupdateClient::poll_completion_via_control_socket() {
     fail("timed out waiting for swupdate completion");
 }
 
-folly::Expected<folly::File, std::string> SwupdateClient::begin_stream_install() {
+camera::base::Expected<camera::base::File, std::string> SwupdateClient::begin_stream_install() {
     if (!try_begin(UpdateState::Uploading)) {
         XLOGF(WARN, "swupdate: stream install requested but busy");
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             std::string("an update is already in progress"));
     }
 
-    folly::File fd = request_install();
+    camera::base::File fd = request_install();
     if (!fd) {
         fail("cannot connect to swupdate IPC");
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             std::string("cannot connect to swupdate IPC"));
     }
 

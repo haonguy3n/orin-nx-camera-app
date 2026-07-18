@@ -17,8 +17,8 @@
 #include "camera/pipeline/CameraSource.h"
 #include "camera/pipeline/SourceFactory.h"
 #include "camera/rtsp/MountController.h"
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
 
 namespace camera {
 
@@ -32,7 +32,7 @@ public:
 
     // Creates the media factories and attaches the server to the default
     // GMainContext. Returns false if no camera is enabled or attach fails.
-    folly::Expected<folly::Unit, std::string> start();
+    camera::base::Expected<camera::base::Unit, std::string> start();
 
     // IStreamController
     const std::string& bound_address() const override { return address_; }

@@ -9,9 +9,9 @@
 #include <string>
 #include <thread>
 
-#include "camera/folly/File.h"
-#include "camera/folly/ScopeGuard.h"
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/File.h"
+#include "camera/base/ScopeGuard.h"
+#include "camera/base/logging/xlog.h"
 #include "proto/Protocol.h"
 
 namespace camera {
@@ -132,7 +132,7 @@ void handle_connection(GSocketConnection* conn, GIOStream* io,
                   "{\"ok\":false,\"error\":\"swupdate busy or unavailable\"}");
         return;
     }
-    folly::File swu_fd = std::move(*swu);
+    camera::base::File swu_fd = std::move(*swu);
 
     // 3. Send ACK to host — ready to receive data
     send_json(io, "{\"ok\":true}");
@@ -196,21 +196,21 @@ UpdateServer::UpdateServer(SwupdateClient& swupdate, const Config& config)
 
 UpdateServer::~UpdateServer() = default;
 
-folly::Expected<folly::Unit, std::string> UpdateServer::start(
+camera::base::Expected<camera::base::Unit, std::string> UpdateServer::start(
     const std::string& address, int port) {
-    auto tls = folly::SSLContext::create(config_.tls_cert, config_.tls_key,
+    auto tls = camera::base::SSLContext::create(config_.tls_cert, config_.tls_key,
                                          config_.tls_ca);
     if (!tls)
-        return folly::makeUnexpected("update: " + tls.error());
+        return camera::base::makeUnexpected("update: " + tls.error());
     tls_ = std::move(*tls);
 
     if (auto r = socket_.bind(address, port); !r)
-        return folly::makeUnexpected("update: " + r.error());
+        return camera::base::makeUnexpected("update: " + r.error());
     socket_.addAcceptCallback(
         [this](GSocketConnection* connection) { accept_connection(connection); });
     socket_.startAccepting();
     XLOGF(INFO, "update server listening on %s:%d", address.c_str(), port);
-    return folly::unit;
+    return camera::base::unit;
 }
 
 void UpdateServer::accept_connection(GSocketConnection* connection) {

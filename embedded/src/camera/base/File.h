@@ -18,7 +18,7 @@
 
 #include <utility>
 
-namespace folly {
+namespace camera::base {
 
 class File {
 public:
@@ -80,4 +80,4 @@ private:
 
 inline void swap(File& a, File& b) noexcept { a.swap(b); }
 
-}  // namespace folly
+}  // namespace camera::base

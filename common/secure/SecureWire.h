@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "camera/folly/Expected.h"
+#include "camera/base/Expected.h"
 
 namespace camera::secure {
 
@@ -55,7 +55,7 @@ public:
     // false when more bytes are needed; returns an error only for a length no
     // valid peer could have sent, which is a framing/authentication failure
     // and must end the session.
-    folly::Expected<bool, std::string> next(std::vector<uint8_t>* record);
+    camera::base::Expected<bool, std::string> next(std::vector<uint8_t>* record);
 
     // Drops zero padding sitting at a record boundary and returns how many
     // bytes went.  Safe because a length of 0 cannot begin a valid record
@@ -75,11 +75,11 @@ private:
     std::vector<uint8_t> buffer_;
 };
 
-folly::Expected<std::vector<uint8_t>, std::string> make_wire_record(
+camera::base::Expected<std::vector<uint8_t>, std::string> make_wire_record(
     Channel channel, uint8_t stream, const std::vector<uint8_t>& payload,
     class SecureRecord& record);
 
-folly::Expected<WireMessage, std::string> open_wire_record(
+camera::base::Expected<WireMessage, std::string> open_wire_record(
     const std::vector<uint8_t>& wire, class SecureRecord& record);
 
 }  // namespace camera::secure

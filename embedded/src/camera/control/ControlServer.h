@@ -12,10 +12,10 @@
 #include "camera/control/ControlContext.h"
 #include "camera/control/ControlHandler.h"
 #include "camera/control/ControlRegistry.h"
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
-#include "camera/folly/io/async/AsyncServerSocket.h"
-#include "camera/folly/io/async/SSLContext.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
+#include "camera/base/io/async/AsyncServerSocket.h"
+#include "camera/base/io/async/SSLContext.h"
 
 namespace camera {
 
@@ -29,7 +29,7 @@ public:
 
     // Binds |address|:|port| and accepts connections on the default
     // GMainContext. Call once.
-    folly::Expected<folly::Unit, std::string> start(
+    camera::base::Expected<camera::base::Unit, std::string> start(
         const std::string& address, int port);
 
 private:
@@ -44,8 +44,8 @@ private:
 
     ControlRegistry& registry_;
     ControlContext context_;
-    folly::AsyncServerSocket socket_;
-    folly::SSLContext tls_;  // disabled unless [server] tls-* is configured
+    camera::base::AsyncServerSocket socket_;
+    camera::base::SSLContext tls_;  // disabled unless [server] tls-* is configured
     std::unordered_set<Conn*> conns_;
 };
 

@@ -1,6 +1,6 @@
-#include "camera/folly/io/async/AsyncServerSocket.h"
+#include "camera/base/io/async/AsyncServerSocket.h"
 
-namespace folly {
+namespace camera::base {
 
 AsyncServerSocket::~AsyncServerSocket() {
     if (service_ != nullptr) {
@@ -55,4 +55,4 @@ gboolean AsyncServerSocket::on_incoming(GSocketService* /*service*/,
     return FALSE;
 }
 
-}  // namespace folly
+}  // namespace camera::base

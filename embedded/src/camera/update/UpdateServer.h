@@ -26,10 +26,10 @@
 
 #include "camera/config/Config.h"
 #include "camera/update/SwupdateClient.h"
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
-#include "camera/folly/io/async/AsyncServerSocket.h"
-#include "camera/folly/io/async/SSLContext.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
+#include "camera/base/io/async/AsyncServerSocket.h"
+#include "camera/base/io/async/SSLContext.h"
 
 namespace camera {
 
@@ -44,7 +44,7 @@ public:
     /// Binds |address|:|port| and accepts upload connections. Each
     /// connection is handled in its own thread (binary upload is blocking).
     /// Returns the failure reason on bind/TLS-config error.
-    folly::Expected<folly::Unit, std::string> start(
+    camera::base::Expected<camera::base::Unit, std::string> start(
         const std::string& address, int port);
 
 private:
@@ -52,8 +52,8 @@ private:
 
     SwupdateClient& swupdate_;
     const Config& config_;
-    folly::SSLContext tls_;  // disabled unless [server] tls-* is configured
-    folly::AsyncServerSocket socket_;
+    camera::base::SSLContext tls_;  // disabled unless [server] tls-* is configured
+    camera::base::AsyncServerSocket socket_;
 };
 
 }  // namespace camera

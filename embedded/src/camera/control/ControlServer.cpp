@@ -4,7 +4,7 @@
 
 #include "camera/control/JsonUtil.h"
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 
@@ -55,22 +55,22 @@ ControlServer::~ControlServer() {
     conns_.clear();
 }
 
-folly::Expected<folly::Unit, std::string> ControlServer::start(
+camera::base::Expected<camera::base::Unit, std::string> ControlServer::start(
     const std::string& address, int port) {
-    auto tls = folly::SSLContext::create(context_.config.tls_cert,
+    auto tls = camera::base::SSLContext::create(context_.config.tls_cert,
                                          context_.config.tls_key,
                                          context_.config.tls_ca);
     if (!tls)
-        return folly::makeUnexpected("control: " + tls.error());
+        return camera::base::makeUnexpected("control: " + tls.error());
     tls_ = std::move(*tls);
 
     if (auto r = socket_.bind(address, port); !r)
-        return folly::makeUnexpected("control: " + r.error());
+        return camera::base::makeUnexpected("control: " + r.error());
     socket_.addAcceptCallback(
         [this](GSocketConnection* connection) { accept_connection(connection); });
     socket_.startAccepting();
     XLOGF(INFO, "control server listening on %s:%d", address.c_str(), port);
-    return folly::unit;
+    return camera::base::unit;
 }
 
 void ControlServer::accept_connection(GSocketConnection* connection) {

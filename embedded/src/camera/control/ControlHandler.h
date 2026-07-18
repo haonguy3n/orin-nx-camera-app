@@ -19,7 +19,7 @@
 #include "camera/pipeline/SourceFactory.h"
 #include "camera/update/SwupdateClient.h"
 #include "camera/lib/v4l2/V4l2Device.h"
-#include "camera/folly/Expected.h"
+#include "camera/base/Expected.h"
 
 namespace camera {
 
@@ -44,7 +44,7 @@ struct ControlError {
 };
 
 // Result of a control call: the result node (transfer full) or an error.
-using HandlerResult = folly::Expected<JsonNode*, ControlError>;
+using HandlerResult = camera::base::Expected<JsonNode*, ControlError>;
 
 // Interface for one control protocol method handler.
 class IControlHandler {

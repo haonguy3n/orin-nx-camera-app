@@ -1,8 +1,8 @@
-// Loopback check for the folly::EventBase and folly::AsyncServerSocket
+// Loopback check for the camera::base::EventBase and camera::base::AsyncServerSocket
 // mimics (GLib-backed).
 // Run from embedded/ (one line):
-//   g++ -std=c++17 -Wall -Wextra -I src src/camera/folly/io/async/AsyncServerSocket.cpp
-//   src/camera/folly/io/async/test/IoCheck.cpp $(pkg-config --cflags --libs
+//   g++ -std=c++17 -Wall -Wextra -I src src/camera/base/io/async/AsyncServerSocket.cpp
+//   src/camera/base/io/async/test/IoCheck.cpp $(pkg-config --cflags --libs
 //   gio-2.0) -o /tmp/io_check && /tmp/io_check
 #include <gio/gio.h>
 
@@ -11,11 +11,11 @@
 #include <string>
 #include <thread>
 
-#include "camera/folly/io/async/AsyncServerSocket.h"
-#include "camera/folly/io/async/EventBase.h"
+#include "camera/base/io/async/AsyncServerSocket.h"
+#include "camera/base/io/async/EventBase.h"
 
 int main() {
-    folly::EventBase evb;
+    camera::base::EventBase evb;
 
     // runInLoop and runAfterDelay execute in order; terminateLoopSoon
     // makes loopForever return.
@@ -44,7 +44,7 @@ int main() {
     assert(watch.expired());
 
     // AsyncServerSocket: accept fires on the loop; echo one message.
-    folly::AsyncServerSocket server;
+    camera::base::AsyncServerSocket server;
     int port = 0;
     for (int candidate = 45871; candidate < 45971; ++candidate) {
         if (server.bind("127.0.0.1", candidate)) {
@@ -53,7 +53,7 @@ int main() {
         }
     }
     assert(port != 0);
-    folly::AsyncServerSocket conflict;
+    camera::base::AsyncServerSocket conflict;
     assert(!conflict.bind("127.0.0.1", port));  // port taken -> must fail
 
     bool accepted = false;

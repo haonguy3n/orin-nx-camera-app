@@ -29,8 +29,8 @@
 #include <gst/app/gstappsink.h>
 #include <gst/gst.h>
 
-#include "camera/folly/ScopeGuard.h"
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/ScopeGuard.h"
+#include "camera/base/logging/xlog.h"
 #include "secure/SecureHandshake.h"
 #include "secure/SecureWire.h"
 #include "camera/secure/SecureRecord.h"

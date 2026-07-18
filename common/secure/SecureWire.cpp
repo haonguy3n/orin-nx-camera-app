@@ -33,7 +33,7 @@ void WireBuffer::consume(size_t count) {
     buffer_.erase(buffer_.begin(), buffer_.begin() + std::min(count, buffer_.size()));
 }
 
-folly::Expected<bool, std::string> WireBuffer::next(std::vector<uint8_t>* record) {
+camera::base::Expected<bool, std::string> WireBuffer::next(std::vector<uint8_t>* record) {
     if (buffer_.size() < 4)
         return false;
     const uint32_t length = (static_cast<uint32_t>(buffer_[0]) << 24) |
@@ -56,7 +56,7 @@ folly::Expected<bool, std::string> WireBuffer::next(std::vector<uint8_t>* record
         }
         if (offset > 0 && offset < static_cast<int>(sizeof(detail)))
             std::snprintf(detail + offset, sizeof(detail) - offset, ")");
-        return folly::makeUnexpected(std::string(detail));
+        return camera::base::makeUnexpected(std::string(detail));
     }
     if (buffer_.size() < 4 + length)
         return false;
@@ -67,11 +67,11 @@ folly::Expected<bool, std::string> WireBuffer::next(std::vector<uint8_t>* record
     return true;
 }
 
-folly::Expected<std::vector<uint8_t>, std::string> make_wire_record(
+camera::base::Expected<std::vector<uint8_t>, std::string> make_wire_record(
     Channel channel, uint8_t stream, const std::vector<uint8_t>& payload,
     SecureRecord& record) {
     if (payload.size() + 2 > kMaxPayload)
-        return folly::makeUnexpected(std::string("secure USB payload too large"));
+        return camera::base::makeUnexpected(std::string("secure USB payload too large"));
     std::vector<uint8_t> plaintext;
     plaintext.reserve(payload.size() + 2);
     plaintext.push_back(static_cast<uint8_t>(channel));
@@ -79,9 +79,9 @@ folly::Expected<std::vector<uint8_t>, std::string> make_wire_record(
     plaintext.insert(plaintext.end(), payload.begin(), payload.end());
     auto encrypted = record.seal(plaintext.data(), plaintext.size());
     if (!encrypted.hasValue())
-        return folly::makeUnexpected(encrypted.error());
+        return camera::base::makeUnexpected(encrypted.error());
     if (encrypted.value().size() > kMaxWireRecord)
-        return folly::makeUnexpected(std::string("secure USB encrypted record too large"));
+        return camera::base::makeUnexpected(std::string("secure USB encrypted record too large"));
     const uint32_t length = static_cast<uint32_t>(encrypted.value().size());
     std::vector<uint8_t> wire(4);
     wire[0] = static_cast<uint8_t>(length >> 24);
@@ -92,23 +92,23 @@ folly::Expected<std::vector<uint8_t>, std::string> make_wire_record(
     return wire;
 }
 
-folly::Expected<WireMessage, std::string> open_wire_record(
+camera::base::Expected<WireMessage, std::string> open_wire_record(
     const std::vector<uint8_t>& wire, SecureRecord& record) {
     if (wire.size() < 4 + 16 + 1)
-        return folly::makeUnexpected(std::string("truncated secure USB record"));
+        return camera::base::makeUnexpected(std::string("truncated secure USB record"));
     const uint32_t length = (static_cast<uint32_t>(wire[0]) << 24) |
                             (static_cast<uint32_t>(wire[1]) << 16) |
                             (static_cast<uint32_t>(wire[2]) << 8) | wire[3];
     if (length > kMaxWireRecord || wire.size() != 4 + length)
-        return folly::makeUnexpected(std::string("invalid secure USB record length"));
+        return camera::base::makeUnexpected(std::string("invalid secure USB record length"));
     auto plaintext = record.open(wire.data() + 4, length);
     if (!plaintext.hasValue())
-        return folly::makeUnexpected(plaintext.error());
+        return camera::base::makeUnexpected(plaintext.error());
     if (plaintext.value().size() < 2)
-        return folly::makeUnexpected(std::string("secure USB record has no header"));
+        return camera::base::makeUnexpected(std::string("secure USB record has no header"));
     const auto channel = static_cast<Channel>(plaintext.value()[0]);
     if (channel != Channel::Video && channel != Channel::Control && channel != Channel::Update)
-        return folly::makeUnexpected(std::string("unknown secure USB channel"));
+        return camera::base::makeUnexpected(std::string("unknown secure USB channel"));
     return WireMessage{channel, plaintext.value()[1],
                        std::vector<uint8_t>(plaintext.value().begin() + 2,
                                             plaintext.value().end())};

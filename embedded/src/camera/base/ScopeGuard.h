@@ -17,7 +17,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace folly {
+namespace camera::base {
 namespace detail {
 
 class ScopeGuardImplBase {
@@ -75,7 +75,7 @@ detail::ScopeGuardImpl<std::decay_t<FunctionType>> makeGuard(
         std::forward<FunctionType>(fn));
 }
 
-}  // namespace folly
+}  // namespace camera::base
 
 #define FOLLY_CONCATENATE_IMPL(s1, s2) s1##s2
 #define FOLLY_CONCATENATE(s1, s2) FOLLY_CONCATENATE_IMPL(s1, s2)
@@ -85,4 +85,4 @@ detail::ScopeGuardImpl<std::decay_t<FunctionType>> makeGuard(
 ///     SCOPE_EXIT { close(fd); };
 #define SCOPE_EXIT                                    \
     auto FOLLY_ANONYMOUS_VARIABLE(SCOPE_EXIT_STATE) = \
-        ::folly::detail::ScopeGuardOnExit() + [&]() noexcept
+        ::camera::base::detail::ScopeGuardOnExit() + [&]() noexcept

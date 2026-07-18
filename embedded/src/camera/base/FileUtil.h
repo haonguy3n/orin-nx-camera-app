@@ -19,7 +19,7 @@
 #include <cerrno>
 #include <cstddef>
 
-namespace folly {
+namespace camera::base {
 
 /// Reads until |count| bytes or EOF. Returns the number of bytes read
 /// (less than |count| only on EOF), or -1 on error. Retries EINTR.
@@ -60,4 +60,4 @@ inline ssize_t writeFull(int fd, const void* buf, size_t count) {
     return static_cast<ssize_t>(sent);
 }
 
-}  // namespace folly
+}  // namespace camera::base
