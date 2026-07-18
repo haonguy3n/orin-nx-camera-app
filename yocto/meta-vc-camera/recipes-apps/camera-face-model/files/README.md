@@ -1,22 +1,8 @@
 # YuNet face-detection model
 
 `camera-face-model.bb` ships the YuNet ONNX that camera-streamer loads for
-on-device face detection. The model is a binary blob and is **not** committed
-to this repo — download it into this directory before building.
-
-## Get the model
-
-From the OpenCV Zoo (MIT-licensed), pin a known revision for reproducibility:
-
-```sh
-cd yocto/meta-vc-camera/recipes-apps/camera-face-model/files
-curl -L -o face_detection_yunet.onnx \
-  https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
-```
-
-The 2023mar variant matches the `cv::FaceDetectorYN` API used in
-`embedded/src/camera/detect/FaceDetector.cpp`. It runs at the detector working
-resolution set in `[detect] width/height` (default 320x320).
+on-device face detection. The recipe **downloads it automatically** at build
+time (OpenCV Zoo, MIT-licensed, sha256-pinned) — nothing to place here by hand.
 
 ## Enable it
 
@@ -24,6 +10,9 @@ resolution set in `[detect] width/height` (default 320x320).
    ```
    CAMERA_FACE_MODEL = "1"
    ```
+   The image then pulls in `camera-face-model`, which fetches
+   `face_detection_yunet_2023mar.onnx` and installs it to
+   `/usr/share/camera-streamer/face_detection_yunet.onnx`.
 2. On the device, turn detection on in `/etc/camera-streamer.conf`:
    ```
    [detect]
@@ -33,3 +22,9 @@ resolution set in `[detect] width/height` (default 320x320).
    then `systemctl restart camera-streamer`.
 
 Boxes are emitted over the secure-USB metadata channel and drawn by the viewer.
+
+## Updating the model
+
+If upstream changes the file, the build fails on a sha256 mismatch. Update
+`SRC_URI[sha256sum]` in the recipe to the new value (bitbake prints it), or pin
+`SRC_URI` to a specific opencv_zoo commit for full reproducibility.
