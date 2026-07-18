@@ -1,5 +1,7 @@
 #include "videopane.h"
 
+#include "faceoverlay.h"
+
 #include <QLabel>
 #include <QMediaPlayer>
 #include <QPalette>
@@ -20,14 +22,30 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
     setPalette(pal);
 
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(4);
+    layout->setContentsMargins(1, 1, 1, 1);
+    layout->setSpacing(0);
 
     m_placeholder = new QWidget(this);
     m_placeholder->setAutoFillBackground(true);
     QPalette pal2 = m_placeholder->palette();
     pal2.setColor(QPalette::Window, Qt::black);
     m_placeholder->setPalette(pal2);
+    auto *emptyLayout = new QVBoxLayout(m_placeholder);
+    emptyLayout->setAlignment(Qt::AlignCenter);
+    emptyLayout->setSpacing(8);
+    auto *cameraGlyph = new QLabel(QStringLiteral("◉"), m_placeholder);
+    cameraGlyph->setObjectName(QStringLiteral("cameraGlyph"));
+    cameraGlyph->setAlignment(Qt::AlignCenter);
+    auto *emptyTitle = new QLabel(QStringLiteral("No live video"), m_placeholder);
+    emptyTitle->setObjectName(QStringLiteral("emptyTitle"));
+    emptyTitle->setAlignment(Qt::AlignCenter);
+    auto *emptyHint = new QLabel(
+        QStringLiteral("Connect to a camera to begin monitoring"), m_placeholder);
+    emptyHint->setObjectName(QStringLiteral("emptyHint"));
+    emptyHint->setAlignment(Qt::AlignCenter);
+    emptyLayout->addWidget(cameraGlyph);
+    emptyLayout->addWidget(emptyTitle);
+    emptyLayout->addWidget(emptyHint);
 
     m_video = new QVideoWidget(this);
 
@@ -40,6 +58,7 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
     m_status = new QLabel(this);
     m_status->setWordWrap(true);
     m_status->setObjectName("mono");
+    m_status->setProperty("role", "videoStatus");
 
     layout->addWidget(m_stack, 1);
     layout->addWidget(m_status);
@@ -147,6 +166,8 @@ void VideoPane::stop()
     m_player->setSource(QUrl());
     m_live = false;
     m_fps = 0.0;
+    if (m_overlay)
+        m_overlay->setBoxes({});  // clear stale boxes
     setStatusText("disconnected");
     showVideo(false);
 }
@@ -166,7 +187,10 @@ void VideoPane::setStatusText(const QString &text)
 
 void VideoPane::refreshStatus()
 {
-    QString line = m_name + ": " + m_stateText;
+    QString displayName = m_name;
+    if (m_name.startsWith(QStringLiteral("cam")))
+        displayName = QStringLiteral("CAMERA %1").arg(m_name.mid(3).toInt() + 1);
+    QString line = displayName + QStringLiteral("   •   ") + m_stateText;
     if (m_live && m_fps > 0.0)
         line += QStringLiteral(" — %1 fps").arg(m_fps, 0, 'f', 1);
     m_status->setText(line);
@@ -175,6 +199,20 @@ void VideoPane::refreshStatus()
 QVideoSink *VideoPane::videoSink() const
 {
     return m_video->videoSink();
+}
+
+void VideoPane::setFaces(const QVector<QRectF> &normalized)
+{
+    if (!m_overlay) {
+        m_overlay = new FaceOverlay(this);
+        m_overlay->show();
+    }
+    // Resync geometry to the video area each update (detection is ~10/s, so
+    // this cheaply tracks window resizes without a resizeEvent override) and
+    // keep it above the video surface.
+    m_overlay->setGeometry(m_stack->geometry());
+    m_overlay->raise();
+    m_overlay->setBoxes(normalized);
 }
 
 void VideoPane::showVideo(bool live)

@@ -14,6 +14,7 @@ class ControlClient;
 class ControlPanel;
 class DiscoveryClient;
 class QComboBox;
+class QLabel;
 class QLineEdit;
 class QPushButton;
 class QMenu;
@@ -42,11 +43,15 @@ private:
     void setupToolbar(QWidget *parent);
     void setupVideoArea(QWidget *parent);
     void setupConnections();
+    void setConnectionState(const QString &text, bool online = false);
     void connectStreams();
     void disconnectStreams();
     // Start/stop the device's cameras via set-stream. connect -> start,
     // disconnect -> stop; symmetric so a reconnect always re-enables.
     void setStreamEnabled(bool enabled);
+    // Parse a Channel::Meta face-box JSON payload and draw it on the camera's
+    // pane. Runs on the GUI thread (marshalled from the bridge worker).
+    void applyFaceMeta(int camera, const QByteArray &json);
     void restartPane(int index);
     QUrl streamUrl(int index) const;
     QString controlHost() const;
@@ -68,6 +73,7 @@ private:
     QMenu *m_discoverMenu = nullptr;
     QComboBox *m_transportSelect = nullptr;
     QComboBox *m_cameraSelect = nullptr;
+    QLabel *m_connectionStatus = nullptr;
 
     // Video area.
     QStackedWidget *m_paneStack = nullptr;

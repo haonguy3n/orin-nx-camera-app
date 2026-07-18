@@ -1,10 +1,13 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QRectF>
 #include <QString>
 #include <QUrl>
+#include <QVector>
 #include <QWidget>
 
+class FaceOverlay;
 class QLabel;
 class QMediaPlayer;
 class QStackedWidget;
@@ -33,6 +36,10 @@ public:
     QVideoSink *videoSink() const;
     QString name() const { return m_name; }
 
+    // Detection boxes to draw over the video, in normalised (0..1) coords.
+    // Empty clears the overlay. Delivered from the secure USB metadata channel.
+    void setFaces(const QVector<QRectF> &normalized);
+
 signals:
     void videoFrameAvailable();
 
@@ -43,6 +50,7 @@ private:
     QLabel *m_status = nullptr;
     QStackedWidget *m_stack = nullptr;
     QWidget *m_placeholder = nullptr;
+    FaceOverlay *m_overlay = nullptr;  // lazily created on first setFaces
 
     void showVideo(bool live);
 

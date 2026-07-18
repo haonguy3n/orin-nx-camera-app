@@ -2,14 +2,17 @@
 
 #include <QThread>
 #include <QComboBox>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -61,7 +64,8 @@ MainWindow::MainWindow(QWidget *parent)
     setupVideoArea(central);
 
     setCentralWidget(central);
-    resize(1280, 620);
+    setMinimumSize(1024, 640);
+    resize(1440, 820);
 
     // Control channel + status poll.
     m_control = new ControlClient(this);
@@ -99,14 +103,64 @@ MainWindow::MainWindow(QWidget *parent)
 
 void MainWindow::setupToolbar(QWidget *parent)
 {
-    auto *topBar = new QHBoxLayout;
-    topBar->setSpacing(6);
-    topBar->setContentsMargins(8, 6, 8, 6);
+    auto *header = new QFrame(parent);
+    header->setObjectName(QStringLiteral("appHeader"));
+    auto *headerLayout = new QHBoxLayout(header);
+    headerLayout->setSpacing(12);
+    headerLayout->setContentsMargins(24, 14, 24, 14);
+
+    auto *mark = new QLabel(QStringLiteral("VC"), header);
+    mark->setObjectName(QStringLiteral("brandMark"));
+    mark->setAlignment(Qt::AlignCenter);
+
+    auto *brandBlock = new QWidget(header);
+    brandBlock->setObjectName(QStringLiteral("transparent"));
+    auto *brandLayout = new QVBoxLayout(brandBlock);
+    brandLayout->setContentsMargins(0, 0, 0, 0);
+    brandLayout->setSpacing(0);
+    auto *brand = new QLabel(QStringLiteral("Vision Console"), brandBlock);
+    brand->setObjectName(QStringLiteral("brandTitle"));
+    auto *version = new QLabel(QStringLiteral("CAMERA MANAGEMENT  •  " CAMERA_VIEWER_VERSION),
+                               brandBlock);
+    version->setObjectName(QStringLiteral("eyebrow"));
+    brandLayout->addWidget(brand);
+    brandLayout->addWidget(version);
+
+    m_connectionStatus = new QLabel(QStringLiteral("●  OFFLINE"), header);
+    m_connectionStatus->setObjectName(QStringLiteral("connectionPill"));
+    m_connectionStatus->setProperty("online", false);
+
+    headerLayout->addWidget(mark);
+    headerLayout->addWidget(brandBlock);
+    headerLayout->addStretch(1);
+    headerLayout->addWidget(m_connectionStatus);
+    parent->layout()->addWidget(header);
+
+    auto *connectionBar = new QFrame(parent);
+    connectionBar->setObjectName(QStringLiteral("connectionBar"));
+    auto *topBar = new QHBoxLayout(connectionBar);
+    topBar->setSpacing(10);
+    topBar->setContentsMargins(24, 12, 24, 12);
+
+    auto addField = [connectionBar, topBar](const QString &title,
+                                            QWidget *field, int stretch = 0) {
+        auto *block = new QWidget(connectionBar);
+        block->setObjectName(QStringLiteral("fieldBlock"));
+        auto *layout = new QVBoxLayout(block);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(5);
+        auto *label = new QLabel(title, block);
+        label->setObjectName(QStringLiteral("fieldLabel"));
+        layout->addWidget(label);
+        layout->addWidget(field);
+        topBar->addWidget(block, stretch);
+    };
 
     m_hostEdit = new QLineEdit(kDefaultHost, parent);
     m_hostEdit->setPlaceholderText(QStringLiteral("Device IP / rtsp://host:port"));
     m_hostEdit->setToolTip(
         QStringLiteral("Device IP/hostname, or an rtsp://host:port base URL"));
+    m_hostEdit->setMinimumWidth(260);
 
     m_transportSelect = new QComboBox(parent);
     m_transportSelect->addItem(QStringLiteral("Auto"));
@@ -123,10 +177,13 @@ void MainWindow::setupToolbar(QWidget *parent)
     m_cameraSelect->setToolTip(
         QStringLiteral("switch the video pane between cameras"));
     // Populated dynamically from get-status / discovery (see populateCameraList)
+    m_cameraSelect->addItem(QStringLiteral("Camera 1"));
+    m_cameraIndices.append(0);
 
     m_connectButton = new QPushButton(QStringLiteral("Connect"), parent);
     m_connectButton->setObjectName(QStringLiteral("accent"));
     m_connectButton->setCursor(Qt::PointingHandCursor);
+    m_connectButton->setMinimumWidth(112);
 
     m_discoverButton = new QPushButton(QStringLiteral("Discover"), parent);
     m_discoverButton->setCursor(Qt::PointingHandCursor);
@@ -134,18 +191,49 @@ void MainWindow::setupToolbar(QWidget *parent)
         QStringLiteral("find devices via UDP broadcast (port %1)").arg(proto::kDiscoveryPort));
     m_discoverMenu = new QMenu(m_discoverButton);
 
-    topBar->addWidget(m_hostEdit, 1);
-    topBar->addWidget(m_transportSelect);
-    topBar->addWidget(m_cameraSelect);
-    topBar->addWidget(m_connectButton);
-    topBar->addWidget(m_discoverButton);
+    addField(QStringLiteral("DEVICE ADDRESS"), m_hostEdit, 1);
+    addField(QStringLiteral("TRANSPORT"), m_transportSelect);
+    addField(QStringLiteral("ACTIVE CAMERA"), m_cameraSelect);
 
-    parent->layout()->addItem(topBar);
+    auto *actions = new QWidget(connectionBar);
+    actions->setObjectName(QStringLiteral("fieldBlock"));
+    auto *actionsLayout = new QHBoxLayout(actions);
+    actionsLayout->setContentsMargins(0, 20, 0, 0);
+    actionsLayout->setSpacing(8);
+    actionsLayout->addWidget(m_discoverButton);
+    actionsLayout->addWidget(m_connectButton);
+    topBar->addWidget(actions);
+    parent->layout()->addWidget(connectionBar);
 }
 
 void MainWindow::setupVideoArea(QWidget *parent)
 {
+    auto *workspace = new QWidget(parent);
+    workspace->setObjectName(QStringLiteral("workspace"));
+    auto *workspaceLayout = new QVBoxLayout(workspace);
+    workspaceLayout->setContentsMargins(24, 18, 24, 24);
+    workspaceLayout->setSpacing(12);
+
+    auto *titleRow = new QHBoxLayout;
+    titleRow->setContentsMargins(0, 0, 0, 0);
+    auto *titleBlock = new QWidget(workspace);
+    titleBlock->setObjectName(QStringLiteral("transparent"));
+    auto *titleLayout = new QVBoxLayout(titleBlock);
+    titleLayout->setContentsMargins(0, 0, 0, 0);
+    titleLayout->setSpacing(2);
+    auto *title = new QLabel(QStringLiteral("Live view"), titleBlock);
+    title->setObjectName(QStringLiteral("pageTitle"));
+    auto *subtitle = new QLabel(
+        QStringLiteral("Monitor the selected camera and tune device parameters"), titleBlock);
+    subtitle->setObjectName(QStringLiteral("subtitle"));
+    titleLayout->addWidget(title);
+    titleLayout->addWidget(subtitle);
+    titleRow->addWidget(titleBlock);
+    titleRow->addStretch(1);
+    workspaceLayout->addLayout(titleRow);
+
     m_paneStack = new QStackedWidget(parent);
+    m_paneStack->setObjectName(QStringLiteral("videoCard"));
     for (int i = 0; i < 2; ++i) {
         m_panes[i] = new VideoPane(QStringLiteral("cam%1").arg(i), parent);
         m_paneStack->addWidget(m_panes[i]);
@@ -155,12 +243,22 @@ void MainWindow::setupVideoArea(QWidget *parent)
     m_controlPanel = new ControlPanel(parent);
 
     auto *paneLayout = new QHBoxLayout;
-    paneLayout->setSpacing(0);
+    paneLayout->setSpacing(16);
     paneLayout->setContentsMargins(0, 0, 0, 0);
     paneLayout->addWidget(m_paneStack, 1);
     paneLayout->addWidget(m_controlPanel);
+    workspaceLayout->addLayout(paneLayout, 1);
+    auto *rootLayout = qobject_cast<QVBoxLayout *>(parent->layout());
+    Q_ASSERT(rootLayout);
+    rootLayout->addWidget(workspace, 1);
+}
 
-    parent->layout()->addItem(paneLayout);
+void MainWindow::setConnectionState(const QString &text, bool online)
+{
+    m_connectionStatus->setText(QStringLiteral("●  ") + text.toUpper());
+    m_connectionStatus->setProperty("online", online);
+    m_connectionStatus->style()->unpolish(m_connectionStatus);
+    m_connectionStatus->style()->polish(m_connectionStatus);
 }
 
 void MainWindow::setupConnections()
@@ -211,6 +309,7 @@ void MainWindow::setupConnections()
 
     // Control channel lifecycle.
     connect(m_control, &ControlClient::connected, this, [this]() {
+        setConnectionState(QStringLiteral("Online"), true);
         m_controlPanel->setControlStatus(QStringLiteral("control: connected"));
         m_controlPanel->clearError();
         m_controlsPopulated = false;
@@ -224,6 +323,7 @@ void MainWindow::setupConnections()
     });
 
     connect(m_control, &ControlClient::disconnected, this, [this]() {
+        setConnectionState(QStringLiteral("Offline"));
         m_calibrator->abort();
         m_controlPanel->setControlStatus(QStringLiteral("control: disconnected"));
         m_controlPanel->setDeviceStatus(QString());
@@ -232,6 +332,8 @@ void MainWindow::setupConnections()
         // Reset camera list so it re-populates on next connect
         m_cameraSelect->clear();
         m_cameraIndices.clear();
+        m_cameraSelect->addItem(QStringLiteral("Camera 1"));
+        m_cameraIndices.append(0);
         m_cameraListPopulated = false;
         m_controlsPopulated = false;
     });
@@ -462,6 +564,7 @@ void MainWindow::connectStreams()
 {
     if (!startSelectedTransport())
         return;
+    setConnectionState(QStringLiteral("Connecting"));
     // This is a single-pane UI: only open the camera that is visible.  In
     // particular, an unavailable second camera must not interfere with the
     // selected camera's decoder/session.  Selecting the other camera opens
@@ -471,6 +574,28 @@ void MainWindow::connectStreams()
     m_connected = true;
     m_connectButton->setText(QStringLiteral("Disconnect"));
     updateCalibrateEnabled();
+}
+
+void MainWindow::applyFaceMeta(int camera, const QByteArray &json)
+{
+    if (camera < 0 || camera >= 2)
+        return;
+    const QJsonObject obj = QJsonDocument::fromJson(json).object();
+    const double w = obj.value(QStringLiteral("w")).toDouble();
+    const double h = obj.value(QStringLiteral("h")).toDouble();
+    QVector<QRectF> boxes;
+    if (w > 0 && h > 0) {
+        // Normalise pixel boxes by the detector frame size, so the pane can
+        // scale to whatever it is currently displayed at.
+        for (const QJsonValue &f : obj.value(QStringLiteral("faces")).toArray()) {
+            const QJsonObject b = f.toObject();
+            boxes.append(QRectF(b.value(QStringLiteral("x")).toDouble() / w,
+                                b.value(QStringLiteral("y")).toDouble() / h,
+                                b.value(QStringLiteral("w")).toDouble() / w,
+                                b.value(QStringLiteral("h")).toDouble() / h));
+        }
+    }
+    m_panes[camera]->setFaces(boxes);
 }
 
 void MainWindow::setStreamEnabled(bool enabled)
@@ -506,6 +631,7 @@ void MainWindow::disconnectStreams()
     m_usingSecureUsb = false;
     m_connected = false;
     m_connectButton->setText(QStringLiteral("Connect"));
+    setConnectionState(QStringLiteral("Offline"));
     updateCalibrateEnabled();
 }
 
@@ -566,6 +692,16 @@ bool MainWindow::startSelectedTransport()
         // hop, no player "connecting" state.
         for (int i = 0; i < 2; ++i)
             m_secureUsbBridge->setVideoSink(i, m_panes[i]->videoSink());
+        // Face-detection boxes arrive on the metadata channel from a bridge
+        // worker thread; marshal to the GUI thread, then draw on the pane.
+        m_secureUsbBridge->setMetaHandler([this](int camera, std::string json) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, camera, bytes = QByteArray::fromStdString(json)] {
+                    applyFaceMeta(camera, bytes);
+                },
+                Qt::QueuedConnection);
+        });
         return true;
     }
 
