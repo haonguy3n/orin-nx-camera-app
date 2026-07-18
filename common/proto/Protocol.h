@@ -35,6 +35,7 @@ constexpr const char* kSetTrigger = "set-trigger";
 constexpr const char* kFireTrigger = "fire-trigger";
 constexpr const char* kSetSync = "set-sync";
 constexpr const char* kSetZoom = "set-zoom";
+constexpr const char* kSetStream = "set-stream";
 constexpr const char* kSetIsp = "set-isp";
 constexpr const char* kListControls = "list-controls";
 constexpr const char* kGetControl = "get-control";

@@ -24,6 +24,7 @@ void register_all_handlers(ControlRegistry& registry) {
     registry.register_handler(std::make_unique<SetSyncHandler>());
     registry.register_handler(std::make_unique<SetIspHandler>());
     registry.register_handler(std::make_unique<SetZoomHandler>());
+    registry.register_handler(std::make_unique<SetStreamHandler>());
     registry.register_handler(std::make_unique<ListControlsHandler>());
     registry.register_handler(std::make_unique<GetControlHandler>());
     registry.register_handler(std::make_unique<SetControlHandler>());

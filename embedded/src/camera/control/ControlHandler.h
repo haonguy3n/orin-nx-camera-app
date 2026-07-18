@@ -32,6 +32,9 @@ struct ControlContext {
     ISourceFactory& source_factory;
     SwupdateClient& swupdate;
     std::function<void()> reload;
+    // Set by the application when a transport (secure USB) carries live
+    // per-camera streams that a config flag alone cannot stop.
+    std::function<void(int camera, bool enabled)> notify_stream;
 };
 
 // A failed control call: JSON-RPC style code + human-readable message.

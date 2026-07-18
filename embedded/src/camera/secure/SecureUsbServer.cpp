@@ -486,7 +486,8 @@ struct Session {
 // Pulls one camera's RTSP mount, strips it to an H.265 elementary stream and
 // pushes that over the session.  RTSP therefore terminates on the device
 // instead of being tunnelled, so its round trips never cross USB.
-void video_loop(Session& session, uint8_t camera, const std::string& description) {
+void video_loop(Session& session, uint8_t camera, const std::string& description,
+                const std::atomic<bool>& enabled) {
     // A camera that is absent never produces a byte, and retrying it forever
     // recreates the device's RTSP mount every few seconds, which restarts its
     // frame watchdog and buries the log. Give up on a barren camera for the
@@ -494,6 +495,13 @@ void video_loop(Session& session, uint8_t camera, const std::string& description
     constexpr int kBarrenLimit = 3;
     int barren = 0;
     while (!session.dead) {
+        if (!enabled) {
+            // set-stream stopped this camera: pipeline stays down (sensor
+            // released) until it is enabled again.
+            barren = 0;
+            usleep(200000);
+            continue;
+        }
         Pipeline pipeline;
         std::string error;
         bool produced = false;
@@ -505,6 +513,11 @@ void video_loop(Session& session, uint8_t camera, const std::string& description
             while (!session.dead) {
                 // Bounded pull so session teardown is noticed promptly even
                 // when the camera has gone quiet.
+                if (!enabled) {
+                    XLOGF(INFO, "secure-usb: cam%u stream stopped by set-stream",
+                          static_cast<unsigned>(camera));
+                    break;  // ~Pipeline releases the sensor
+                }
                 GstSample* sample = gst_app_sink_try_pull_sample(
                     pipeline.sink, 200 * GST_MSECOND);
                 if (sample == nullptr) {
@@ -613,6 +626,11 @@ bool SecureUsbServer::start(std::string* error) {
     worker_ = std::thread(&SecureUsbServer::run, this);
     return true;
 }
+void SecureUsbServer::set_stream_enabled(uint8_t camera, bool enabled) {
+    if (camera < kCameras)
+        stream_enabled_[camera] = enabled;
+}
+
 void SecureUsbServer::stop() {
     stopping_ = true;
     if (worker_.joinable()) {
@@ -775,7 +793,8 @@ void SecureUsbServer::serve_session(int ep0) {
                 Session* raw = session.get();
                 for (uint8_t camera = 0; camera < kCameras; ++camera) {
                     workers.emplace_back([this, raw, camera] {
-                        video_loop(*raw, camera, video_description(camera));
+                        video_loop(*raw, camera, video_description(camera),
+                                   stream_enabled_[camera]);
                     });
                 }
                 workers.emplace_back([raw] { local_to_usb_loop(*raw); });

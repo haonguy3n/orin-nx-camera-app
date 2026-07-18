@@ -22,6 +22,10 @@ public:
     ~SecureUsbServer();
     bool start(std::string* error);
     void stop();
+    // set-stream: starts/stops one camera's video push without touching the
+    // session. Off = the video loop parks and its pipeline (and sensor) is
+    // released; on = it respawns within ~200 ms.
+    void set_stream_enabled(uint8_t camera, bool enabled);
 
 private:
     void run();
@@ -37,6 +41,7 @@ private:
     std::string certificate_;
     std::string private_key_;
     std::vector<std::string> video_launch_;
+    std::atomic<bool> stream_enabled_[2] = {{true}, {true}};
     std::atomic<bool> stopping_{false};
     std::atomic<bool> worker_exited_{false};
     std::thread worker_;

@@ -79,6 +79,16 @@ folly::Expected<folly::Unit, std::string> Application::start_servers() {
             *source_factory_,
             swupdate_,
             [this]() { reload(); },
+            [this](int camera, bool enabled) {
+#ifdef ENABLE_SECURE_USB
+                if (secure_usb_)
+                    secure_usb_->set_stream_enabled(static_cast<uint8_t>(camera),
+                                                    enabled);
+#else
+                (void)camera;
+                (void)enabled;
+#endif
+            },
         };
         control_ = std::make_unique<ControlServer>(registry_,
                                                     std::move(ctx));

@@ -314,6 +314,20 @@ No params. → current SWUpdate installation status:
 `percent`/`step`/`total_steps`/`current` are only meaningful while
 `state` is `installing`. Poll this every 2 s during an update.
 
+### set-stream
+
+Starts or stops one camera's video stream at runtime, without a reload.
+
+```json
+{"id": 7, "method": "set-stream", "params": {"camera": 0, "enabled": false}}
+```
+
+Over secure USB the camera's push loop parks and the sensor is released;
+re-enabling restarts it within ~200 ms. The flag also updates the runtime
+config, so `get-config` reflects it; it is not persisted across restarts.
+(Over RTSP, streams already start/stop with client connections; this method
+additionally marks the camera disabled for future sessions.)
+
 ## OTA firmware update (TCP, port 8557)
 
 Dedicated binary upload channel for `.swu` (SWUpdate) packages. The host

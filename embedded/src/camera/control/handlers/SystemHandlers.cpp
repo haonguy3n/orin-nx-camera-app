@@ -59,4 +59,20 @@ HandlerResult RebootHandler::handle(JsonObject* /*params*/, ControlContext& /*ct
     return empty_result();
 }
 
+HandlerResult SetStreamHandler::handle(JsonObject* params, ControlContext& ctx) {
+    auto cam_idx = require_camera(params);
+    if (!cam_idx)
+        return folly::makeUnexpected(cam_idx.error());
+    bool enabled = true;
+    if (!param_bool(params, "enabled", &enabled))
+        return folly::makeUnexpected(
+            ControlError{kInvalidParams, "enabled must be a boolean"});
+    ctx.config.cameras[*cam_idx].enabled = enabled;
+    if (ctx.notify_stream)
+        ctx.notify_stream(*cam_idx, enabled);
+    XLOGF(INFO, "control: cam%d stream %s", *cam_idx,
+          enabled ? "started" : "stopped");
+    return empty_result();
+}
+
 }  // namespace camera
