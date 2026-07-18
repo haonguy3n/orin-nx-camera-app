@@ -9,7 +9,12 @@ LICENSE = "CLOSED"
 
 PV = "0.4"
 
-inherit cmake pkgconfig systemd externalsrc
+# cuda: the image's OpenCV is built WITH_CUDA (for the DNN CUDA backend that
+# face detection uses), so its OpenCVConfig.cmake forces find_package(CUDA) on
+# any consumer. inherit cuda puts CUDA_TOOLKIT_ROOT_DIR into the cmake
+# configure and DEPENDS the CUDA libraries, satisfying that -- even though this
+# app compiles no CUDA of its own (it calls OpenCV at runtime).
+inherit cmake pkgconfig systemd externalsrc cuda
 
 # The application sources live in the same git repository as this layer:
 #   <repo>/yocto/meta-vc-camera  (this layer, VC_CAMERA_LAYERDIR)
