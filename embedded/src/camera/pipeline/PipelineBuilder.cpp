@@ -64,11 +64,15 @@ std::string PipelineBuilder::detect_branch(int width, int height) {
     // actually watches. Leaky drops old frames on this branch so detection is
     // best-effort and can never block video. max-size-buffers=1 also keeps
     // Argus NVMM buffers from being held here.
+    // Scale on nvvidconv, NOT videoconvert: videoconvert only changes pixel
+    // format and cannot rescale, so putting width/height on its output caps
+    // fails negotiation and breaks the whole tee. nvvidconv does the resize
+    // (and the NVMM->CPU download); videoconvert then only BGRx->BGR.
     return "queue leaky=downstream max-size-buffers=1"
            " ! nvvidconv ! video/x-raw,format=BGRx"
-           " ! videoconvert ! video/x-raw,format=BGR"
            ",width=" + std::to_string(width) +
            ",height=" + std::to_string(height) +
+           " ! videoconvert ! video/x-raw,format=BGR"
            " ! appsink name=detect sync=false max-buffers=1 drop=true";
 }
 
