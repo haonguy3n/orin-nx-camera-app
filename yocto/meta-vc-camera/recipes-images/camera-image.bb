@@ -41,6 +41,12 @@ IMAGE_INSTALL += " \
 # pin, not verify.
 IMAGE_INSTALL += "${@'camera-device-cert' if d.getVar('CAMERA_DEVICE_CERT_DIR') else ''}"
 
+# YuNet face-detection model, when opted in (CAMERA_FACE_MODEL = "1" in
+# local.conf) and the .onnx has been placed in the recipe's files/ dir (see
+# recipes-apps/camera-face-model/files/README.md). Detection still defaults
+# off in camera-streamer.conf until enabled there.
+IMAGE_INSTALL += "${@'camera-face-model' if d.getVar('CAMERA_FACE_MODEL') else ''}"
+
 # Static ISP tuning for the color IMX296C: currently the DIY black-level
 # override (sensor pedestal subtraction — fixes the pink haze), measured
 # and verified on target 2026-07-12. Extend the file via tools/isp-tuning

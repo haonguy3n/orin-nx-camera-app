@@ -8,3 +8,6 @@ oe-*
 *.crt
 *.csr
 *.srl
+
+# Face-detection model blob (download into the recipe files/ dir, see its README)
+*.onnx
