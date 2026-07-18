@@ -37,20 +37,6 @@
 namespace camera::secure {
 namespace {
 
-int connect_local(uint16_t port) {
-    const int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) return -1;
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_port = htons(port);
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-        close(fd);
-        return -1;
-    }
-    return fd;
-}
-
 
 constexpr uint8_t kCameras = 2;
 
@@ -279,82 +265,36 @@ private:
     std::atomic<bool> exited_{false};
 };
 
-// One authenticated session: the outbound writer plus the local control/update
-// tunnel and the host-silence watchdog.
-struct Session {
-    Session(int endpoint, const SecureRecord::Key& key, const SecureRecord::Iv& iv)
-        : writer_(endpoint, key, iv, dead) {}
+// The local control/update tunnel. Host->device records for these channels
+// are handed to loopback TCP servers (deliver); replies produced locally are
+// polled and passed back to the writer via the enqueue callback (pump). Video
+// never touches this -- it is device-to-host only.
+class LocalTunnel {
+public:
+    using Enqueue = std::function<bool(Channel, const uint8_t*, size_t)>;
+    LocalTunnel(std::atomic<bool>& dead, Enqueue enqueue)
+        : dead_(dead), enqueue_(std::move(enqueue)) {}
 
-    std::atomic<bool> dead{false};
-
-    std::mutex local_mutex;
-    int control = -1;
-    int update = -1;
-
-    // Last time anything arrived from the host. The UI polls status every
-    // few seconds over the tunnel, so a live viewer keeps this fresh; a host
-    // that exits just goes silent -- a gadget gets no disconnect signal --
-    // and without this the cameras kept capturing forever afterwards.
-    std::atomic<int64_t> last_inbound_ms{0};
-
-    static int64_t now_ms() {
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::steady_clock::now().time_since_epoch())
-            .count();
-    }
-
-    // True while a local updater connection exists: an upload can stall all
-    // tunnel traffic for as long as a flash commit takes, and the host-
-    // silence watchdog must not read that as a departed viewer.
-    bool has_active_update() {
-        std::lock_guard<std::mutex> lock(local_mutex);
-        return update >= 0;
-    }
-
-    bool enqueue(Channel channel, uint8_t stream, const uint8_t* data, size_t size,
-                 bool droppable) {
-        return writer_.enqueue(channel, stream, data, size, droppable);
-    }
-
-    size_t dropped_bytes() const { return writer_.dropped_bytes(); }
-
-    // Writer-thread entry: runs the record writer with the host-silence
-    // watchdog as its end condition. The host polls control every few seconds,
-    // so silence well beyond that means the viewer is gone -- ending the
-    // session stops the video pipelines, releasing the cameras.
-    void writer_loop() {
-        writer_.run([this] {
-            constexpr int64_t kHostSilenceMs = 15000;
-            if (now_ms() - last_inbound_ms >= kHostSilenceMs && !has_active_update()) {
-                XLOGF(INFO, "secure-usb: host silent for %llds; ending session "
-                            "(cameras stop)",
-                      static_cast<long long>(kHostSilenceMs / 1000));
-                return true;
-            }
-            return false;
-        });
-    }
-
-    // Host -> local server.  A dead local server drops its channel; it must
-    // not end the session, which also carries video.
-    bool deliver_local(const WireMessage& message) {
+    // Host -> local server. A dead local server drops its channel; it must not
+    // end the session, which also carries video. Always returns true.
+    bool deliver(const WireMessage& message) {
         if (message.channel == Channel::Video) return true;  // device-to-host only
-        std::lock_guard<std::mutex> lock(local_mutex);
-        int& fd = message.channel == Channel::Control ? control : update;
+        std::lock_guard<std::mutex> lock(mutex_);
+        int& fd = message.channel == Channel::Control ? control_ : update_;
         const uint16_t port = message.channel == Channel::Control ? 8555 : 8557;
         if (message.channel == Channel::Update)
             XLOGF(INFO, "secure-usb: update: %zu bytes to local updater",
                   message.payload.size());
-        // Two attempts with a fresh connection in between: a held-open fd may
-        // be a finished session's socket (EPIPE on write), and dropping this
-        // payload on that would eat the first chunk of the next upload.
+        // Two attempts with a fresh connection between: a held-open fd may be a
+        // finished session's socket (EPIPE on write), and dropping this payload
+        // on that would eat the first chunk of the next upload.
         for (int attempt = 0; attempt < 2; ++attempt) {
             if (fd < 0)
                 fd = connect_local(port);
             if (fd < 0)
                 break;
             if (endpoint_write_all(fd, message.payload.data(),
-                                   message.payload.size(), dead))
+                                   message.payload.size(), dead_))
                 return true;
             close(fd);
             fd = -1;
@@ -364,16 +304,123 @@ struct Session {
         return true;
     }
 
-    void snapshot_local(int* control_fd, int* update_fd) {
-        std::lock_guard<std::mutex> lock(local_mutex);
-        *control_fd = control;
-        *update_fd = update;
+    // True while an updater connection is open: an upload can stall all tunnel
+    // traffic for as long as a flash commit takes, and the host-silence
+    // watchdog must not read that as a departed viewer.
+    bool has_active_update() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return update_ >= 0;
     }
 
-    void close_local(Channel channel) {
-        std::lock_guard<std::mutex> lock(local_mutex);
-        int& fd = channel == Channel::Control ? control : update;
+    // Local servers -> host. poll() is valid here: these are TCP sockets, not
+    // FunctionFS endpoint files. Runs on its own thread until `dead`.
+    void pump() {
+        std::vector<uint8_t> chunk(32 * 1024);
+        while (!dead_) {
+            int snapshot[2];
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                snapshot[0] = control_;
+                snapshot[1] = update_;
+            }
+            pollfd fds[] = {{snapshot[0], POLLIN, 0}, {snapshot[1], POLLIN, 0}};
+            if (poll(fds, 2, 100) <= 0) continue;
+            for (int i = 0; i != 2; ++i) {
+                if (!(fds[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
+                const Channel channel = i == 0 ? Channel::Control : Channel::Update;
+                const ssize_t n = read(fds[i].fd, chunk.data(), chunk.size());
+                if (n <= 0) { close_channel(channel); continue; }
+                if (!enqueue_(channel, chunk.data(), static_cast<size_t>(n))) {
+                    dead_ = true;
+                    return;
+                }
+            }
+        }
+    }
+
+    void shutdown() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Shut down before closing so a thread blocked in read() wakes.
+        for (int* fd : {&control_, &update_}) {
+            if (*fd >= 0) { ::shutdown(*fd, SHUT_RDWR); close(*fd); *fd = -1; }
+        }
+    }
+
+private:
+    static int connect_local(uint16_t port) {
+        const int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (fd < 0) return -1;
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_port = htons(port);
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+            close(fd);
+            return -1;
+        }
+        return fd;
+    }
+
+    void close_channel(Channel channel) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        int& fd = channel == Channel::Control ? control_ : update_;
         if (fd >= 0) { close(fd); fd = -1; }
+    }
+
+    std::atomic<bool>& dead_;
+    Enqueue enqueue_;
+    std::mutex mutex_;
+    int control_ = -1;
+    int update_ = -1;
+};
+
+// One authenticated session: a thin coordinator over the outbound writer, the
+// local control/update tunnel, and the host-silence watchdog.
+struct Session {
+    Session(int endpoint, const SecureRecord::Key& key, const SecureRecord::Iv& iv)
+        : writer_(endpoint, key, iv, dead),
+          tunnel_(dead, [this](Channel c, const uint8_t* d, size_t n) {
+              return writer_.enqueue(c, 0, d, n, /*droppable=*/false);
+          }) {}
+
+    std::atomic<bool> dead{false};
+
+    // Last time anything arrived from the host. The UI polls status every few
+    // seconds over the tunnel, so a live viewer keeps this fresh; a host that
+    // exits just goes silent -- a gadget gets no disconnect signal -- and
+    // without this the cameras kept capturing forever afterwards.
+    std::atomic<int64_t> last_inbound_ms{0};
+
+    static int64_t now_ms() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+
+    bool enqueue(Channel channel, uint8_t stream, const uint8_t* data, size_t size,
+                 bool droppable) {
+        return writer_.enqueue(channel, stream, data, size, droppable);
+    }
+    size_t dropped_bytes() const { return writer_.dropped_bytes(); }
+    bool deliver_local(const WireMessage& message) { return tunnel_.deliver(message); }
+    void pump_tunnel() { tunnel_.pump(); }
+
+    // Writer-thread entry: runs the record writer with the host-silence
+    // watchdog as its end condition. Silence well beyond the UI's poll cadence
+    // means the viewer is gone -- ending the session stops the video pipelines,
+    // releasing the cameras.
+    void writer_loop() {
+        writer_.run([this] {
+            constexpr int64_t kHostSilenceMs = 15000;
+            if (now_ms() - last_inbound_ms >= kHostSilenceMs
+                && !tunnel_.has_active_update()) {
+                XLOGF(INFO, "secure-usb: host silent for %llds; ending session "
+                            "(cameras stop)",
+                      static_cast<long long>(kHostSilenceMs / 1000));
+                return true;
+            }
+            return false;
+        });
     }
 
     void shutdown() {
@@ -381,15 +428,12 @@ struct Session {
         // The writer may be blocked in a kernel write on the endpoint; only a
         // signal wakes it (see endpoint I/O comment above).
         writer_.request_stop();
-        std::lock_guard<std::mutex> lock(local_mutex);
-        // Shut down before closing so a thread blocked in read() wakes.
-        for (int* fd : {&control, &update}) {
-            if (*fd >= 0) { ::shutdown(*fd, SHUT_RDWR); close(*fd); *fd = -1; }
-        }
+        tunnel_.shutdown();
     }
 
 private:
     RecordWriter writer_;
+    LocalTunnel tunnel_;
 };
 
 // Pulls one camera's RTSP mount, strips it to an H.265 elementary stream and
@@ -494,26 +538,6 @@ void video_loop(Session& session, uint8_t camera, const std::string& description
 
 // Local control/update servers -> host.  poll() is valid here: these are TCP
 // sockets, not FunctionFS endpoint files.
-void local_to_usb_loop(Session& session) {
-    std::vector<uint8_t> chunk(32 * 1024);
-    while (!session.dead) {
-        int control_fd = -1, update_fd = -1;
-        session.snapshot_local(&control_fd, &update_fd);
-        pollfd fds[] = {{control_fd, POLLIN, 0}, {update_fd, POLLIN, 0}};
-        if (poll(fds, 2, 100) <= 0) continue;
-        for (int i = 0; i != 2; ++i) {
-            if (!(fds[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
-            const Channel channel = i == 0 ? Channel::Control : Channel::Update;
-            const ssize_t n = read(fds[i].fd, chunk.data(), chunk.size());
-            if (n <= 0) { session.close_local(channel); continue; }
-            if (!session.enqueue(channel, 0, chunk.data(), static_cast<size_t>(n), false)) {
-                session.dead = true;
-                return;
-            }
-        }
-    }
-}
-
 }  // namespace
 
 SecureUsbServer::SecureUsbServer(std::string certificate, std::string private_key,
@@ -689,7 +713,7 @@ void SecureUsbServer::serve_session(int ep0) {
                                    stream_enabled_[camera]);
                     });
                 }
-                workers.emplace_back([raw] { local_to_usb_loop(*raw); });
+                workers.emplace_back([raw] { raw->pump_tunnel(); });
                 workers.emplace_back([raw] { raw->writer_loop(); });
                 continue;
             }
