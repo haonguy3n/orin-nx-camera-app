@@ -29,6 +29,10 @@ public:
     void sendRequest(const QString &method, const QJsonObject &params,
                      Callback callback);
 
+    // Push buffered request bytes and wait briefly for them to leave, so a
+    // final command (set-stream stop) reaches the wire before a disconnect.
+    void flush();
+
 signals:
     void connected();
     void disconnected();

@@ -87,6 +87,14 @@ void ControlClient::sendRequest(const QString &method, const QJsonObject &params
     m_socket->write(QJsonDocument(request).toJson(QJsonDocument::Compact) + '\n');
 }
 
+void ControlClient::flush()
+{
+    if (m_socket && m_socket->state() == QAbstractSocket::ConnectedState) {
+        m_socket->flush();
+        m_socket->waitForBytesWritten(200);
+    }
+}
+
 void ControlClient::readLines()
 {
     while (m_socket->canReadLine()) {

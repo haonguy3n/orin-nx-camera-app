@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 
+#include <QThread>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QJsonArray>
@@ -215,6 +216,9 @@ void MainWindow::setupConnections()
         m_controlsPopulated = false;
         m_calibrationResult.clear();
         m_controlPanel->setControlsEnabled(true);
+        // connect -> start the device's cameras (symmetric with the
+        // disconnect -> stop). Idempotent: a fresh device is already enabled.
+        setStreamEnabled(true);
         m_statusTimer->start();
         pollStatus();
     });
@@ -469,13 +473,32 @@ void MainWindow::connectStreams()
     updateCalibrateEnabled();
 }
 
+void MainWindow::setStreamEnabled(bool enabled)
+{
+    if (!m_control->isConnected())
+        return;
+    for (int i = 0; i < 2; ++i)
+        m_control->sendRequest(
+            QLatin1String(proto::methods::kSetStream),
+            QJsonObject{{QStringLiteral("camera"), i},
+                        {QStringLiteral("enabled"), enabled}},
+            [](const QJsonObject &, const QJsonObject &) {});
+    m_control->flush();
+}
+
 void MainWindow::disconnectStreams()
 {
-    // "I'm leaving" is a session-end, not a per-camera disable -- so it is not
-    // set-stream (which would persist enabled=false and leave the cameras dark
-    // on the next connect). The device ends the session, releasing the
-    // sensors, when its host-silence watchdog sees the tunnel go quiet
-    // (~5 s). set-stream stays for deliberate per-camera start/stop.
+    // disconnect -> stop the device's cameras explicitly. Symmetric with the
+    // connect -> start in the control-connected handler, so the persisted
+    // enabled=false is always undone on the next connect (no dark reconnect).
+    // The host-silence watchdog remains a backstop for ungraceful drops.
+    setStreamEnabled(false);
+    // Over secure USB the stop still has to cross the tunnel (control socket
+    // -> bridge -> USB -> device); give the bridge worker a brief window to
+    // pump it before the bridge is torn down.
+    if (m_usingSecureUsb && m_control->isConnected())
+        QThread::msleep(150);
+
     for (VideoPane *pane : m_panes)
         pane->stop();
     m_control->disconnectFromDevice();

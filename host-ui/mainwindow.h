@@ -44,6 +44,9 @@ private:
     void setupConnections();
     void connectStreams();
     void disconnectStreams();
+    // Start/stop the device's cameras via set-stream. connect -> start,
+    // disconnect -> stop; symmetric so a reconnect always re-enables.
+    void setStreamEnabled(bool enabled);
     void restartPane(int index);
     QUrl streamUrl(int index) const;
     QString controlHost() const;

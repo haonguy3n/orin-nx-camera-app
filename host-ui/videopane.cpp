@@ -93,6 +93,10 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
                     if (!m_live) {
                         m_live = true;
                         m_fpsClock.restart();
+                        // The secure USB path pushes frames straight to the
+                        // sink with no QMediaPlayer state change, so nothing
+                        // else moves the label off "waiting for frames".
+                        setStatusText(QStringLiteral("playing"));
                     }
                     showVideo(true);
                     emit videoFrameAvailable();
