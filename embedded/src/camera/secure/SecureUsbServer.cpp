@@ -18,6 +18,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -177,26 +178,114 @@ struct Pipeline {
     }
 };
 
-// Shared session state.  The endpoint has one writer mutex because several
-// threads push into it: two video pipelines plus the control/update tunnel.
+// The single thread that writes to the endpoint. Several producers -- two
+// video pipelines and the control/update tunnel -- enqueue records; this
+// drains them in seal order. Isolated from Session so the queue machinery is
+// not tangled with the session's local-socket and watchdog state.
+class RecordWriter {
+public:
+    RecordWriter(int endpoint, const SecureRecord::Key& key,
+                 const SecureRecord::Iv& iv, std::atomic<bool>& dead)
+        : endpoint_(endpoint), encrypt_(key, iv), dead_(dead) {}
+
+    // Seal `size` bytes and queue them. The ordering lock spans seal+queue so
+    // wire order matches seal order: the record nonce is an implicit counter,
+    // and reordering (or dropping *after* sealing) desynchronises the peer.
+    //
+    // `droppable` video is discarded once the queue passes kQueueLimit rather
+    // than blocking the producer -- a synchronous stall here would back up
+    // through the encoder until the frame watchdog killed the camera. Control
+    // and update are never droppable; they are not replaceable. Returns false
+    // only if sealing fails.
+    bool enqueue(Channel channel, uint8_t stream, const uint8_t* data,
+                 size_t size, bool droppable) {
+        std::lock_guard<std::mutex> ordering(ordering_);
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (droppable && queued_bytes_ >= kQueueLimit) {
+                dropped_bytes_ += size;
+                return true;
+            }
+        }
+        auto wire = make_wire_record(channel, stream,
+                                     std::vector<uint8_t>(data, data + size), encrypt_);
+        if (!wire.hasValue()) return false;
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        queued_bytes_ += wire.value().size();
+        queue_.push_back(std::move(wire.value()));
+        queue_signal_.notify_one();
+        return true;
+    }
+
+    // Drains the queue on this thread until `dead`. `should_end` is polled
+    // each idle tick (the session's host-silence watchdog); returning true
+    // ends the session.
+    void run(const std::function<bool()>& should_end) {
+        thread_ = pthread_self();
+        started_ = true;
+        size_t written = 0, reported = 0;
+        while (!dead_) {
+            if (should_end()) { dead_ = true; break; }
+            std::vector<uint8_t> record;
+            {
+                std::unique_lock<std::mutex> lock(queue_mutex_);
+                queue_signal_.wait_for(lock, std::chrono::milliseconds(100),
+                                       [this] { return !queue_.empty() || dead_; });
+                if (queue_.empty()) continue;
+                record = std::move(queue_.front());
+                queue_.pop_front();
+                queued_bytes_ -= record.size();
+            }
+            if (!endpoint_write_all(endpoint_, record.data(), record.size(), dead_)) {
+                dead_ = true;
+                break;
+            }
+            if (written == 0)
+                XLOGF(INFO, "secure-usb: first record (%zu bytes) on the endpoint",
+                      record.size());
+            written += record.size();
+            // "sent" in video_loop counts enqueues; this counts bytes the host
+            // actually drained. Diverging numbers mean a stalled host.
+            if (written - reported >= 8 * 1024 * 1024) {
+                reported = written;
+                XLOGF(INFO, "secure-usb: %zu KiB drained by host", written / 1024);
+            }
+        }
+        exited_ = true;
+    }
+
+    // Wakes a write blocked in the kernel so run() can observe `dead`.
+    void request_stop() {
+        queue_signal_.notify_all();
+        if (started_)
+            wake_until_exited(thread_, exited_);
+    }
+
+    size_t dropped_bytes() const { return dropped_bytes_; }
+
+private:
+    static constexpr size_t kQueueLimit = 4 * 1024 * 1024;
+    int endpoint_;
+    SecureRecord encrypt_;  // guarded by ordering_
+    std::atomic<bool>& dead_;
+    std::mutex ordering_;
+    std::mutex queue_mutex_;
+    std::condition_variable queue_signal_;
+    std::deque<std::vector<uint8_t>> queue_;
+    size_t queued_bytes_ = 0;
+    size_t dropped_bytes_ = 0;
+    pthread_t thread_{};
+    std::atomic<bool> started_{false};
+    std::atomic<bool> exited_{false};
+};
+
+// One authenticated session: the outbound writer plus the local control/update
+// tunnel and the host-silence watchdog.
 struct Session {
     Session(int endpoint, const SecureRecord::Key& key, const SecureRecord::Iv& iv)
-        : endpoint(endpoint), encrypt(key, iv) {}
+        : writer_(endpoint, key, iv, dead) {}
 
-    int endpoint;
-    SecureRecord encrypt;  // guarded by write_mutex
-    std::mutex write_mutex;
     std::atomic<bool> dead{false};
-
-    // Outbound queue. ~4 MiB is roughly a second of both streams at the
-    // configured bitrate: enough to ride out a brief host stall, small enough
-    // that dropping beats accumulating latency nobody wants to watch.
-    static constexpr size_t kQueueLimit = 4 * 1024 * 1024;
-    std::mutex queue_mutex;
-    std::condition_variable queue_signal;
-    std::deque<std::vector<uint8_t>> queue;
-    size_t queued_bytes = 0;
-    size_t dropped_bytes = 0;
 
     std::mutex local_mutex;
     int control = -1;
@@ -222,86 +311,28 @@ struct Session {
         return update >= 0;
     }
 
-    // For waking a writer blocked in a kernel endpoint write at teardown.
-    pthread_t writer_thread{};
-    std::atomic<bool> writer_started{false};
-    std::atomic<bool> writer_exited{false};
-
-    // Queues a record for the writer thread.
-    //
-    // Video is `droppable`: when the host stops draining the endpoint, a
-    // synchronous write here blocks the camera reader, which fills the
-    // pipeline's stdout pipe, which stalls its RTSP session, which starves
-    // the encoder until the frame watchdog declares the camera dead. Dropping
-    // frames is the correct response to a slow link; blocking the camera is
-    // not. Control and update are never dropped -- they are not replaceable.
     bool enqueue(Channel channel, uint8_t stream, const uint8_t* data, size_t size,
                  bool droppable) {
-        // Held across encrypt+queue so records reach the wire in the order
-        // they were sealed: the record nonce is an implicit counter, and any
-        // reordering (or dropping *after* sealing) desynchronises the peer.
-        std::lock_guard<std::mutex> ordering(write_mutex);
-        {
-            std::lock_guard<std::mutex> lock(queue_mutex);
-            if (droppable && queued_bytes >= kQueueLimit) {
-                dropped_bytes += size;
-                return true;
-            }
-        }
-        auto wire = make_wire_record(channel, stream,
-                                     std::vector<uint8_t>(data, data + size), encrypt);
-        if (!wire.hasValue()) return false;
-        std::lock_guard<std::mutex> lock(queue_mutex);
-        queued_bytes += wire.value().size();
-        queue.push_back(std::move(wire.value()));
-        queue_signal.notify_one();
-        return true;
+        return writer_.enqueue(channel, stream, data, size, droppable);
     }
 
-    // Sole owner of endpoint writes, so a stalled host blocks only this
-    // thread.
+    size_t dropped_bytes() const { return writer_.dropped_bytes(); }
+
+    // Writer-thread entry: runs the record writer with the host-silence
+    // watchdog as its end condition. The host polls control every few seconds,
+    // so silence well beyond that means the viewer is gone -- ending the
+    // session stops the video pipelines, releasing the cameras.
     void writer_loop() {
-        writer_thread = pthread_self();
-        writer_started = true;
-        // The host polls control every few seconds; well beyond that means
-        // the viewer is gone. Ending the session stops the video pipelines,
-        // which releases the cameras.
-        constexpr int64_t kHostSilenceMs = 15000;
-        size_t written = 0, reported = 0;
-        while (!dead) {
+        writer_.run([this] {
+            constexpr int64_t kHostSilenceMs = 15000;
             if (now_ms() - last_inbound_ms >= kHostSilenceMs && !has_active_update()) {
                 XLOGF(INFO, "secure-usb: host silent for %llds; ending session "
                             "(cameras stop)",
                       static_cast<long long>(kHostSilenceMs / 1000));
-                dead = true;
-                break;
+                return true;
             }
-            std::vector<uint8_t> record;
-            {
-                std::unique_lock<std::mutex> lock(queue_mutex);
-                queue_signal.wait_for(lock, std::chrono::milliseconds(100),
-                                      [this] { return !queue.empty() || dead; });
-                if (queue.empty()) continue;
-                record = std::move(queue.front());
-                queue.pop_front();
-                queued_bytes -= record.size();
-            }
-            if (!endpoint_write_all(endpoint, record.data(), record.size(), dead)) {
-                dead = true;
-                break;
-            }
-            if (written == 0)
-                XLOGF(INFO, "secure-usb: first record (%zu bytes) on the endpoint",
-                      record.size());
-            written += record.size();
-            // "sent" in video_loop counts enqueues; this counts bytes the
-            // host actually drained. Diverging numbers mean a stalled host.
-            if (written - reported >= 8 * 1024 * 1024) {
-                reported = written;
-                XLOGF(INFO, "secure-usb: %zu KiB drained by host", written / 1024);
-            }
-        }
-        writer_exited = true;
+            return false;
+        });
     }
 
     // Host -> local server.  A dead local server drops its channel; it must
@@ -347,17 +378,18 @@ struct Session {
 
     void shutdown() {
         dead = true;
-        queue_signal.notify_all();
-        // The writer may be blocked in a kernel write on the endpoint; only
-        // a signal wakes it (see endpoint I/O comment above).
-        if (writer_started)
-            wake_until_exited(writer_thread, writer_exited);
+        // The writer may be blocked in a kernel write on the endpoint; only a
+        // signal wakes it (see endpoint I/O comment above).
+        writer_.request_stop();
         std::lock_guard<std::mutex> lock(local_mutex);
         // Shut down before closing so a thread blocked in read() wakes.
         for (int* fd : {&control, &update}) {
             if (*fd >= 0) { ::shutdown(*fd, SHUT_RDWR); close(*fd); *fd = -1; }
         }
     }
+
+private:
+    RecordWriter writer_;
 };
 
 // Pulls one camera's RTSP mount, strips it to an H.265 elementary stream and
@@ -591,9 +623,9 @@ void SecureUsbServer::serve_session(int ep0) {
         for (auto& worker : workers)
             worker.join();
         workers.clear();
-        if (session->dropped_bytes != 0) {
+        if (session->dropped_bytes() != 0) {
             XLOGF(INFO, "secure-usb: session ended (dropped %zu KiB of video)",
-                  session->dropped_bytes / 1024);
+                  session->dropped_bytes() / 1024);
         } else {
             XLOGF(INFO, "secure-usb: session ended");
         }
