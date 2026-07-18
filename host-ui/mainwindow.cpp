@@ -42,7 +42,10 @@ constexpr int kTransportNetwork = 2;
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle(QStringLiteral("camera-viewer"));
+#ifndef CAMERA_VIEWER_VERSION
+#define CAMERA_VIEWER_VERSION "dev"
+#endif
+    setWindowTitle(QStringLiteral("camera-viewer " CAMERA_VIEWER_VERSION));
     setStyleSheet(Theme::stylesheet());
     Theme::applyFont(this);
     setAutoFillBackground(true);
@@ -468,6 +471,11 @@ void MainWindow::connectStreams()
 
 void MainWindow::disconnectStreams()
 {
+    // "I'm leaving" is a session-end, not a per-camera disable -- so it is not
+    // set-stream (which would persist enabled=false and leave the cameras dark
+    // on the next connect). The device ends the session, releasing the
+    // sensors, when its host-silence watchdog sees the tunnel go quiet
+    // (~5 s). set-stream stays for deliberate per-camera start/stop.
     for (VideoPane *pane : m_panes)
         pane->stop();
     m_control->disconnectFromDevice();

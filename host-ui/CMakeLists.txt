@@ -55,6 +55,12 @@ target_link_libraries(camera-viewer PRIVATE
     PkgConfig::GSTRTSP
     OpenSSL::Crypto
 )
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/GitVersion.cmake)
+derive_git_version("0.4.0" CAMERA_VIEWER_VERSION)
+message(STATUS "camera-viewer version: ${CAMERA_VIEWER_VERSION}")
+target_compile_definitions(camera-viewer PRIVATE
+    CAMERA_VIEWER_VERSION="${CAMERA_VIEWER_VERSION}")
+
 target_include_directories(camera-viewer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../embedded/src)
 target_sources(camera-viewer PRIVATE

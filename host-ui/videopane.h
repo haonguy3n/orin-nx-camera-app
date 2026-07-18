@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QString>
 #include <QUrl>
 #include <QWidget>
@@ -7,6 +8,7 @@
 class QLabel;
 class QMediaPlayer;
 class QStackedWidget;
+class QTimer;
 class QVideoSink;
 class QVideoWidget;
 
@@ -43,4 +45,15 @@ private:
     QWidget *m_placeholder = nullptr;
 
     void showVideo(bool live);
+
+    // Displayed frame rate, measured at the sink so it is true end-to-end
+    // fps for either transport (network QMediaPlayer or the secure USB
+    // decoder both feed this same QVideoSink).
+    void refreshStatus();
+    QString m_stateText = QStringLiteral("disconnected");
+    QTimer *m_fpsTimer = nullptr;
+    QElapsedTimer m_fpsClock;
+    int m_framesSinceTick = 0;
+    double m_fps = 0.0;
+    bool m_live = false;
 };

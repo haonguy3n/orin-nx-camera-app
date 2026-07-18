@@ -71,9 +71,12 @@ target_include_directories(camera-streamer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../common)
 target_compile_options(camera-streamer PRIVATE -Wall -Wextra)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/GitVersion.cmake)
+derive_git_version("${PROJECT_VERSION}" APP_VERSION_STRING)
+message(STATUS "camera-streamer version: ${APP_VERSION_STRING}")
 target_compile_definitions(camera-streamer PRIVATE
     DEFAULT_CONF_PATH="${CMAKE_INSTALL_FULL_SYSCONFDIR}/camera-streamer.conf"
-    APP_VERSION="${PROJECT_VERSION}"
+    APP_VERSION="${APP_VERSION_STRING}"
 )
 target_link_libraries(camera-streamer PRIVATE PkgConfig::GST)
 

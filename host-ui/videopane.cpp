@@ -4,6 +4,7 @@
 #include <QMediaPlayer>
 #include <QPalette>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QVideoFrame>
 #include <QVideoSink>
@@ -85,10 +86,35 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
     connect(m_video->videoSink(), &QVideoSink::videoFrameChanged, this,
             [this](const QVideoFrame &frame) {
                 if (frame.isValid()) {
+                    // Emitted from a decode worker thread; this slot runs on
+                    // the GUI thread via a queued connection, so the counter
+                    // needs no lock.
+                    ++m_framesSinceTick;
+                    if (!m_live) {
+                        m_live = true;
+                        m_fpsClock.restart();
+                    }
                     showVideo(true);
                     emit videoFrameAvailable();
                 }
             });
+
+    // Recompute displayed fps once a second.
+    m_fpsTimer = new QTimer(this);
+    m_fpsTimer->setInterval(1000);
+    connect(m_fpsTimer, &QTimer::timeout, this, [this] {
+        if (!m_live)
+            return;
+        const qint64 elapsed = m_fpsClock.restart();
+        if (elapsed > 0)
+            m_fps = m_framesSinceTick * 1000.0 / static_cast<double>(elapsed);
+        m_framesSinceTick = 0;
+        // A whole tick with no frame: the stream stalled -- stop claiming fps.
+        if (m_fps == 0.0)
+            m_live = false;
+        refreshStatus();
+    });
+    m_fpsTimer->start();
 }
 
 void VideoPane::start(const QUrl &url)
@@ -111,6 +137,8 @@ void VideoPane::stop()
 {
     m_player->stop();
     m_player->setSource(QUrl());
+    m_live = false;
+    m_fps = 0.0;
     setStatusText("disconnected");
     showVideo(false);
 }
@@ -124,7 +152,16 @@ void VideoPane::restart(const QUrl &url)
 
 void VideoPane::setStatusText(const QString &text)
 {
-    m_status->setText(m_name + ": " + text);
+    m_stateText = text;
+    refreshStatus();
+}
+
+void VideoPane::refreshStatus()
+{
+    QString line = m_name + ": " + m_stateText;
+    if (m_live && m_fps > 0.0)
+        line += QStringLiteral(" — %1 fps").arg(m_fps, 0, 'f', 1);
+    m_status->setText(line);
 }
 
 QVideoSink *VideoPane::videoSink() const

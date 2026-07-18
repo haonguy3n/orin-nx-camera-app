@@ -411,7 +411,13 @@ struct Session {
     // releasing the cameras.
     void writer_loop() {
         writer_.run([this] {
-            constexpr int64_t kHostSilenceMs = 15000;
+            // The UI polls control every ~2 s, so silence past a couple of
+            // polls means the viewer is gone. A soft disconnect (releasing
+            // the USB handle) does not error the endpoint, so this watchdog
+            // -- not an I/O failure -- is what stops the cameras; keep it
+            // tight so a disconnect releases the sensors promptly. An active
+            // OTA upload legitimately stalls the tunnel and is exempt.
+            constexpr int64_t kHostSilenceMs = 5000;
             if (now_ms() - last_inbound_ms >= kHostSilenceMs
                 && !tunnel_.has_active_update()) {
                 XLOGF(INFO, "secure-usb: host silent for %llds; ending session "
