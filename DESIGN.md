@@ -213,15 +213,31 @@ Two capture paths exist on Jetson; support both behind one interface, choose per
    IMX296 (no debayer needed) and for trigger-synchronized machine-vision capture where
    deterministic frames matter more than 3A. Needs format conversion before NVENC.
 
-Milestone-1 pipeline (per camera, on device):
+Capture is shared by both transports. `media::CameraPipeline` owns one pipeline
+per sensor -- Argus permits a single consumer per camera, so nothing else opens
+it -- and the tail differs by mode:
 
 ```
-nvarguscamerasrc sensor-id=0 ! 'video/x-raw(memory:NVMM),width=1440,height=1080,framerate=60/1'
-  ! nvv4l2h265enc bitrate=8000000 insert-sps-pps=true idrinterval=30
-  ! h265parse ! rtph265pay
+# usb mode: encoder tapped directly, no RTP, no loopback
+nvarguscamerasrc name=camsrc sensor-id=0 ! 'video/x-raw(memory:NVMM),1440x1080@60'
+  ! tee name=t
+  t. ! queue ! nvv4l2h265enc ... ! h265parse ! appsink name=sink
+  t. ! queue leaky=downstream ! nvvidconv ! video/x-raw,format=BGRx,320x240
+     ! appsink name=detect        # face detection
+
+# network mode: same source, RTP payloader plus the same detect branch
+  t. ! queue ! nvv4l2h265enc ... ! h265parse ! rtph265pay name=pay0
+  t. ! ... ! appsink name=detect
 ```
 
-wrapped in **gst-rtsp-server** with mounts `rtsp://192.168.55.1:8554/cam0` and `/cam1`.
+In network mode this is wrapped in **gst-rtsp-server** as `/cam0` and `/cam1`.
+gst-rtsp-server only requires that `pay0` exists, so the detect appsink lives in
+the same bin and `MountController` picks it up on `media-configure`.
+
+Note `videoconvert` is deliberately absent: it is not in the device image, and
+`gst_parse_launch` answers a missing element with a PARTIAL pipeline plus a
+non-fatal error -- which silently dropped the whole detect branch while video
+kept working. `nvvidconv` emits system-memory BGRx directly.
 
 Bandwidth check: 2 × 8 Mbit/s H.265 ≪ ~350 Mbit/s usable USB2 — big headroom (2 ×
 ~50 Mbit/s near-lossless is still fine).
@@ -234,7 +250,7 @@ host: `gst-launch-1.0 udpsrc port=5000 ! … ! autovideosink`.
 
 ## 4. Embedded application (`camera-streamer`, C++)
 
-C++17, CMake, systemd service. A supervised GStreamer graph plus the servers
+C++20, CMake, systemd service. A supervised GStreamer graph plus the servers
 around it (the tree below is the shipped structure — folly/fboss-style naming,
 `namespace camera`; see `embedded/README.md` for the full layout):
 

@@ -1,27 +1,48 @@
 # camera-app — dual IMX296 streaming for Jetson Orin NX
 
-C++ camera device software for a **Jetson Orin NX + VC MIPI dual IMX296**
-(one color IMX296C, one mono IMX296), built with Yocto, streaming
-hardware-encoded H.265 over RTSP to a Linux host — over the USB-C cable
-(CDC-NCM network gadget) or ethernet — with a Qt host application for
+C++ camera device software for a **Jetson Orin NX + VC MIPI dual IMX296**,
+built with Yocto, streaming hardware-encoded H.265 to a Linux host over the
+USB-C cable, with on-device face detection and a Qt host application for
 viewing and camera control.
 
+**One transport serves video at a time**, chosen by `[server] transports`
+(Argus permits a single consumer per camera). See
+[docs/TRANSPORT-ARCHITECTURE.md](docs/TRANSPORT-ARCHITECTURE.md).
+
+`transports=usb` — the default. Everything rides the USB endpoints inside an
+authenticated, encrypted session (ECDHE-P256 + ChaCha20-Poly1305), multiplexed
+into channels: video, control, firmware update, and detection metadata. **No
+TCP or UDP socket is bound at all**, except the recovery listener below.
+
 ```
-rtsp://192.168.55.1:8554/cam0   color IMX296C (Argus/ISP)
-rtsp://192.168.55.1:8554/cam1   mono IMX296  (Argus for now, see DESIGN M3)
-tcp://192.168.55.1:8555         JSON control protocol (proto/PROTOCOL.md)
-udp  192.168.55.1:8556          discovery responder
-tcp://192.168.55.1:8557         OTA .swu upload -> swupdate (A/B rootfs)
+usb endpoints ep1/ep2       video + control + update + face-detection boxes
+tcp://192.168.55.1:8557     recovery .swu upload (the one bound socket)
 ```
 
-The control and update channels support optional TLS/mTLS ("secure USB",
-`[server] tls-*` — see `embedded/README.md`).
+`transports=network` — RTSP for interop with VLC/ffmpeg/NVRs. Video is **not**
+encrypted on this path; detection boxes arrive as control events instead of on
+the metadata channel.
 
-**Status**: M1 (streaming) and M2 (dual streams, host UI, control channel)
-verified on hardware — dual concurrent 1440×1080@60 H.265. M3 in progress:
-discovery/trigger/zoom/frame-metadata shipped; hardware-triggered sync
-capture, color calibration and factory flash still open. OTA updates work
-via swupdate (A/B rootfs). See `DESIGN.md` for architecture and milestones.
+```
+rtsp://<device>:8554/cam0   H.265, colour IMX296C (Argus/ISP)
+tcp://<device>:8555         JSON control protocol + pushed events
+udp  <device>:8556          discovery responder
+tcp://<device>:8557         OTA .swu upload -> swupdate (A/B rootfs)
+```
+
+Face detection (YuNet on the GPU via OpenCV/CUDA) runs on **both** transports;
+the host draws the same boxes either way.
+
+**Status**: streaming, host UI, control channel, OTA (swupdate, A/B rootfs)
+and on-device face detection verified on hardware. Both transports work and
+both carry detection.
+
+Open: colour calibration is partly done — the optical-black pedestal fix
+removed the magenta cast, but the current single value over-subtracts blue, so
+a per-channel bias is still needed. Hardware-triggered sync capture and factory
+flash remain. **cam1 is currently disabled**: the second sensor is unplugged,
+and it did not enumerate before that (Argus saw one sensor). See `DESIGN.md`
+for architecture and milestones.
 
 ## Layout
 
@@ -59,6 +80,7 @@ trigger, digital zoom and ISP controls live in the right-hand panel.
 **No UI needed** for a quick look:
 
 ```sh
+# network mode only; usb mode publishes no RTSP
 ffplay -rtsp_transport tcp rtsp://192.168.55.1:8554/cam0
 printf '{"id":1,"method":"get-status"}\n' | nc -q1 192.168.55.1 8555
 ```
