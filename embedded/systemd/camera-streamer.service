@@ -1,7 +1,7 @@
 [Unit]
 Description=Camera RTSP streaming service
-After=network.target camera-streamer-gencert.service
-Wants=camera-streamer-gencert.service
+After=network.target camera-streamer-gencert.service usb-gadget.service
+Wants=camera-streamer-gencert.service usb-gadget.service
 
 [Service]
 Type=notify

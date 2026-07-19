@@ -4,19 +4,19 @@
 
 #include "camera/control/JsonUtil.h"
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 
 HandlerResult SetZoomHandler::handle(JsonObject* params, ControlContext& ctx) {
     auto cam_idx = require_camera(params);
     if (!cam_idx) {
-        return folly::makeUnexpected(cam_idx.error());
+        return camera::base::makeUnexpected(cam_idx.error());
     }
     double factor;
     if (!param_double(params, "factor", &factor) || factor < 1.0 ||
         factor > 8.0) {
-        return folly::makeUnexpected(ControlError{kInvalidParams, "factor must be a number in 1.0-8.0"});
+        return camera::base::makeUnexpected(ControlError{kInvalidParams, "factor must be a number in 1.0-8.0"});
     }
 
     CameraConfig& cam = ctx.config.cameras[*cam_idx];

@@ -22,7 +22,7 @@ CameraControls::CameraControls(int cameraIndex, QWidget *parent)
 void CameraControls::setupUi()
 {
     auto *section = new CollapsibleSection(
-        QStringLiteral("CAM%1").arg(m_index), this);
+        QStringLiteral("Camera %1").arg(m_index + 1), this);
     section->setExpanded(false);  // collapsed by default — click to show
     layout()->addWidget(section);
 
@@ -119,7 +119,8 @@ void CameraControls::setupIspSection(QWidget *parent)
     // ISP overrides (set-isp, argus source only — the server rejects the
     // whole group for v4l2/test). Same conventions as above: combos send on
     // user activation, spin boxes on editingFinished with a lastSent guard.
-    auto *ispSection = new CollapsibleSection(QStringLiteral("ISP"), parent);
+    auto *ispSection = new CollapsibleSection(
+        QStringLiteral("Image processing"), parent);
     ispSection->setExpanded(false);  // collapsed by default — click to show
 
     auto *ispForm = new QFormLayout(ispSection->contentWidget());

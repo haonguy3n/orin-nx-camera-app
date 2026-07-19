@@ -1,5 +1,5 @@
 // Single source of truth for the host <-> device protocol constants
-// (documented in proto/PROTOCOL.md). Shared by embedded/ (camera-streamer,
+// (documented in docs/PROTOCOL.md). Shared by embedded/ (camera-streamer,
 // GLib) and host-ui/ (Qt): pure C++17, no framework dependencies — keep it
 // that way so both sides can include it.
 #pragma once
@@ -35,10 +35,21 @@ constexpr const char* kSetTrigger = "set-trigger";
 constexpr const char* kFireTrigger = "fire-trigger";
 constexpr const char* kSetSync = "set-sync";
 constexpr const char* kSetZoom = "set-zoom";
+// Runtime nvarguscamerasrc ISP properties: wbmode (5 = daylight), saturation,
+// tnr-*, ee-*, aeantibanding, ... Reaches the secure-USB pipeline as well as
+// RTSP via UsbAwareStreamController -- before that it silently did nothing
+// under transports=usb. NOT the black-level pedestal: that lives in
+// camera_overrides.isp and is only read when Argus opens the sensor.
 constexpr const char* kSetIsp = "set-isp";
+// CPU/GPU/thermal sample, for measuring the cost of a change. Percentages
+// are deltas since the previous call, so poll twice and use the second.
+constexpr const char* kGetMetrics = "get-metrics";
+constexpr const char* kSetStream = "set-stream";
 constexpr const char* kListControls = "list-controls";
 constexpr const char* kGetControl = "get-control";
 constexpr const char* kSetControl = "set-control";
+// Writes one frame from the detection branch to disk, for ISP debugging.
+constexpr const char* kSnapshot = "snapshot";
 // Sent by host-ui's white-balance calibrator but NOT implemented by the
 // device yet (answers kUnknownMethod) — drift found when this header was
 // created. Implement device-side or drop the host call.

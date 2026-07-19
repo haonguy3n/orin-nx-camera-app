@@ -3,12 +3,15 @@
 #   * CDC-NCM network function -> usb0, 192.168.55.1/24 on the device side
 #     (the host side gets 192.168.55.100 via dnsmasq, see /etc/dnsmasq.d/usb0.conf)
 #   * ACM serial function      -> /dev/ttyGS0, with a getty on it
+# camera-streamer adds the optional FunctionFS vendor bulk function after it
+# has published that function's descriptors.
 #
 # Modelled on stock L4T nv-l4t-usb-device-mode, but minimal and self-contained.
 set -eu
 
 GADGET_DIR=/sys/kernel/config/usb_gadget/vc-camera
 DEV_IP=192.168.55.1/24
+FFS_MOUNT=/dev/ffs-secure
 
 # Fixed, locally administered MACs so both ends get stable interface identity.
 DEV_MAC="02:ca:fe:55:00:01"
@@ -23,6 +26,7 @@ start() {
     modprobe libcomposite 2>/dev/null || true
     modprobe usb_f_ncm 2>/dev/null || true
     modprobe usb_f_acm 2>/dev/null || true
+    modprobe usb_f_fs 2>/dev/null || true
 
     if [ -s "$GADGET_DIR/UDC" ]; then
         echo "usb-gadget: already bound to $(cat "$GADGET_DIR/UDC")"
@@ -48,7 +52,7 @@ start() {
     echo "VC MIPI dual IMX296 camera" > strings/0x409/product
 
     mkdir -p configs/c.1/strings/0x409
-    echo "CDC-NCM network + ACM serial" > configs/c.1/strings/0x409/configuration
+    echo "Camera USB network + ACM" > configs/c.1/strings/0x409/configuration
     echo 250 > configs/c.1/MaxPower
 
     # --- CDC-NCM network function ---
@@ -100,10 +104,11 @@ stop() {
     cd "$GADGET_DIR"
     # unbind first, then dismantle in reverse creation order
     echo "" > UDC 2>/dev/null || true
-    rm -f configs/c.1/ncm.usb0 configs/c.1/acm.GS0
+    rm -f configs/c.1/ncm.usb0 configs/c.1/acm.GS0 configs/c.1/ffs.secure
     rmdir configs/c.1/strings/0x409 configs/c.1 \
-          functions/ncm.usb0 functions/acm.GS0 \
+          functions/ncm.usb0 functions/acm.GS0 functions/ffs.secure \
           strings/0x409 2>/dev/null || true
+    umount "$FFS_MOUNT" 2>/dev/null || true
     cd /
     rmdir "$GADGET_DIR" 2>/dev/null || true
 }

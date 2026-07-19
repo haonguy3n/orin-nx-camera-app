@@ -17,17 +17,16 @@
 #include <string>
 
 #include "camera/config/Config.h"
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
 
 namespace camera {
 
 class IStreamController;  // from core/StreamController.h
-class IV4l2DeviceFactory; // from lib/v4l2/V4l2Device.h
 
-// Result of a runtime setting application: folly::unit on success,
+// Result of a runtime setting application: camera::base::unit on success,
 // error message on failure.
-using SourceResult = folly::Expected<folly::Unit, std::string>;
+using SourceResult = camera::base::Expected<camera::base::Unit, std::string>;
 
 class ICameraSource {
 public:
@@ -40,6 +39,13 @@ public:
     // as required by gst_rtsp_media_factory_set_launch. The source element
     // is always named "camsrc" so the stream controller can reach it live.
     virtual std::string build_launch(const CameraConfig& cam) const = 0;
+
+    // Just the capture part -- the bare fragment ending right before the
+    // encoder, "camsrc" inside, no "( )". This is what the usb transport's
+    // media::PipelineSpec carries; the typed encode/detect chain is built
+    // onto it programmatically (media::CameraPipeline::build).
+    virtual std::string build_source_fragment(const CameraConfig& cam)
+        const = 0;
 
     // Applies initial sensor settings (exposure, gain, trigger) at startup.
     // For argus/test this is a no-op (settings go into the launch string);
@@ -58,8 +64,7 @@ public:
 
     // Runtime setting: hardware trigger mode (0..7).
     // Only meaningful for v4l2 sources; returns error for others.
-    virtual SourceResult set_trigger(CameraConfig& cam, int mode,
-                                     IV4l2DeviceFactory& v4l2) const = 0;
+    virtual SourceResult set_trigger(CameraConfig& cam, int mode) const = 0;
 
     // Runtime setting: nvarguscamerasrc ISP property.
     // Only meaningful for argus sources; returns error for others.

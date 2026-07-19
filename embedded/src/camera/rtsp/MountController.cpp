@@ -1,8 +1,16 @@
 #include "camera/rtsp/MountController.h"
 
+#include <gst/app/gstappsink.h>
+
+#include <chrono>
+
+#include "camera/base/logging/xlog.h"
+#include "camera/detect/FaceDetector.h"
+#include "camera/detect/Snapshot.h"
+
 #include <glib.h>
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 
@@ -64,6 +72,96 @@ GstPadProbeReturn MountController::on_payload_buffer(GstPad* /*pad*/,
     return GST_PAD_PROBE_OK;
 }
 
+void MountController::enable_detection(detect::IMetaSink* meta,
+                                       std::string model, int width,
+                                       int height, double score, int fps) {
+    meta_sink_ = meta;
+    detect_model_ = std::move(model);
+    detect_width_ = width;
+    detect_height_ = height;
+    detect_score_ = score;
+    detect_fps_ = fps;
+}
+
+void MountController::stop_detection() {
+    detect_stop_ = true;
+    if (detect_thread_.joinable()) detect_thread_.join();
+    detect_stop_ = false;
+}
+
+// Starts detection for one media. gst-rtsp-server builds the pipeline per
+// client, so this runs while a client is connected and stops when the media
+// goes away -- the same "no session, no detection" property the USB path has.
+void MountController::start_detection(GstElement* bin) {
+#ifndef ENABLE_SECURE_USB
+    // The detect/ implementation TUs (OpenCV) are only compiled with the
+    // secure-USB extras; without them there is no detector to run.
+    (void)bin;
+#else
+    if (meta_sink_ == nullptr || detect_model_.empty() || bin == nullptr) return;
+    GstElement* raw = gst_bin_get_by_name(GST_BIN(bin), "detect");
+    if (raw == nullptr) return;  // launch string has no detect branch
+
+    stop_detection();
+    auto loaded = detect::create_face_detector(detect_model_, detect_width_,
+                                               detect_height_,
+                                               static_cast<float>(detect_score_));
+    if (!loaded.hasValue()) {
+        XLOGF(WARN, "rtsp: face detection disabled: %s", loaded.error().c_str());
+        gst_object_unref(raw);
+        return;
+    }
+
+    // Paced like the USB path: the appsink blocks rather than dropping, so not
+    // pulling is what keeps VIC and the GPU idle between detections.
+    const int interval = detect_fps_ > 0 ? 1000 / detect_fps_ : 0;
+    const uint8_t camera = static_cast<uint8_t>(index_);
+    detect_thread_ = std::thread(
+        [this, raw, camera, interval,
+         detector = std::shared_ptr<detect::IFaceDetector>(
+             std::move(loaded.value()))]() mutable {
+            while (!detect_stop_) {
+                if (interval > 0)
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(interval));
+                if (detect_stop_) break;
+                GstSample* sample = gst_app_sink_try_pull_sample(
+                    GST_APP_SINK(raw), 200 * GST_MSECOND);
+                if (sample == nullptr) continue;
+                int width = 0, height = 0;
+                if (GstCaps* caps = gst_sample_get_caps(sample)) {
+                    const GstStructure* st = gst_caps_get_structure(caps, 0);
+                    gst_structure_get_int(st, "width", &width);
+                    gst_structure_get_int(st, "height", &height);
+                }
+                GstBuffer* buffer = gst_sample_get_buffer(sample);
+                GstMapInfo map;
+                if (width > 0 && height > 0 && buffer != nullptr &&
+                    gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                    const int stride = static_cast<int>(map.size) / height;
+                    const auto boxes =
+                        detector->detect(map.data, width, height, stride);
+                    if (const std::string path =
+                            detect::take_snapshot_request(camera);
+                        !path.empty()) {
+                        detect::write_bgr_ppm(path, map.data, width, height,
+                                              stride, /*bytes_per_pixel=*/4,
+                                              boxes);
+                    }
+                    meta_sink_->on_meta(
+                        camera,
+                        detect::to_meta_json(camera, width, height, boxes));
+                    gst_buffer_unmap(buffer, &map);
+                }
+                gst_sample_unref(sample);
+            }
+            gst_object_unref(raw);
+        });
+    XLOGF(INFO, "rtsp: cam%u face detection running on the mount",
+          static_cast<unsigned>(camera));
+#endif
+}
+
 void MountController::on_media_configure(GstRTSPMediaFactory* /*factory*/,
                                          GstRTSPMedia* media,
                                          gpointer user_data) {
@@ -75,6 +173,7 @@ void MountController::on_media_configure(GstRTSPMediaFactory* /*factory*/,
 
     g_weak_ref_set(&self->media_, media);
     g_weak_ref_set(&self->source_, src);
+    self->start_detection(bin);
     if (pay != nullptr) {
         GstPad* pad = gst_element_get_static_pad(pay, "src");
         if (pad != nullptr) {
@@ -106,6 +205,7 @@ void MountController::on_media_unprepared(GstRTSPMedia* /*media*/,
     auto* self = static_cast<MountController*>(user_data);
     g_weak_ref_set(&self->media_, nullptr);
     g_weak_ref_set(&self->source_, nullptr);
+    self->stop_detection();
     XLOGF(INFO, "%s: pipeline stopped", self->mount_path_.c_str());
 }
 

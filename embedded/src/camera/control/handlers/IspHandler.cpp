@@ -6,13 +6,13 @@
 
 #include "camera/control/JsonUtil.h"
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 
 namespace {
 
-// nvarguscamerasrc properties settable via set-isp (proto/PROTOCOL.md).
+// nvarguscamerasrc properties settable via set-isp (docs/PROTOCOL.md).
 // Everything else on the element (sensor-id, ranges, ...) is owned by the
 // launch string / dedicated methods and must not be poked freely.
 const char* const kIspParams[] = {
@@ -34,11 +34,11 @@ bool is_isp_param(const std::string& name) {
 HandlerResult SetIspHandler::handle(JsonObject* params, ControlContext& ctx) {
     auto cam_idx = require_camera(params);
     if (!cam_idx) {
-        return folly::makeUnexpected(cam_idx.error());
+        return camera::base::makeUnexpected(cam_idx.error());
     }
     CameraConfig& cam = ctx.config.cameras[*cam_idx];
     if (cam.source != "argus") {
-        return folly::makeUnexpected(ControlError{kFailed, "ISP controls require the argus source "
+        return camera::base::makeUnexpected(ControlError{kFailed, "ISP controls require the argus source "
                    "(current source '" + cam.source + "')"});
     }
 
@@ -50,23 +50,23 @@ HandlerResult SetIspHandler::handle(JsonObject* params, ControlContext& ctx) {
             name = json_node_get_string(n);
     }
     if (!is_isp_param(name)) {
-        return folly::makeUnexpected(ControlError{kInvalidParams, "param must be one of the nvarguscamerasrc ISP "
+        return camera::base::makeUnexpected(ControlError{kInvalidParams, "param must be one of the nvarguscamerasrc ISP "
                    "properties (see PROTOCOL.md)"});
     }
 
     if (params == nullptr || !json_object_has_member(params, "value")) {
-        return folly::makeUnexpected(ControlError{kInvalidParams, "missing value"});
+        return camera::base::makeUnexpected(ControlError{kInvalidParams, "missing value"});
     }
     JsonNode* vn = json_object_get_member(params, "value");
     if (JSON_NODE_HOLDS_NULL(vn)) {  // forget the override
-        auto source = ctx.source_factory.create(cam.source);
+        auto source = create_source(cam.source);
         if (source)
             source->set_isp(*cam_idx, cam, name, "", ctx.stream);
         XLOGF(INFO, "control: cam%d isp %s reset", *cam_idx, name.c_str());
         return empty_result();
     }
     if (!JSON_NODE_HOLDS_VALUE(vn)) {
-        return folly::makeUnexpected(ControlError{kInvalidParams, "value must be a string, number, bool or null"});
+        return camera::base::makeUnexpected(ControlError{kInvalidParams, "value must be a string, number, bool or null"});
     }
 
     std::string value;
@@ -83,13 +83,13 @@ HandlerResult SetIspHandler::handle(JsonObject* params, ControlContext& ctx) {
         value = buf;
     }
 
-    auto source = ctx.source_factory.create(cam.source);
+    auto source = create_source(cam.source);
     if (!source) {
-        return folly::makeUnexpected(ControlError{kFailed, "unknown source '" + cam.source + "'"});
+        return camera::base::makeUnexpected(ControlError{kFailed, "unknown source '" + cam.source + "'"});
     }
     SourceResult r = source->set_isp(*cam_idx, cam, name, value, ctx.stream);
     if (!r) {
-        return folly::makeUnexpected(ControlError{kFailed, std::move(r.error())});
+        return camera::base::makeUnexpected(ControlError{kFailed, std::move(r.error())});
     }
     XLOGF(INFO, "control: cam%d isp %s = %s", *cam_idx, name.c_str(),
               value.c_str());

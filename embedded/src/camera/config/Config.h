@@ -25,7 +25,7 @@ struct CameraConfig {
     int bitrate = 8000000;          // bit/s
 
     // Sensor settings, also settable at runtime via the control protocol
-    // (proto/PROTOCOL.md). argus: mapped to nvarguscamerasrc range
+    // (docs/PROTOCOL.md). argus: mapped to nvarguscamerasrc range
     // properties; v4l2: mapped to the VC driver's V4L2 controls.
     int exposure = 0;               // us; 0 = auto (argus) / driver default
     double gain = 0;                // 0 = auto/default; argus: multiplier,
@@ -56,11 +56,35 @@ struct Config {
     // Switch at runtime by editing the file and sending SIGHUP
     // (systemctl reload camera-streamer).
     std::string listen = "all";
+    // Which transports carry video/control/update:
+    //   both     - network and secure USB at once (default)
+    //   network  - TCP only; the secure USB endpoint is not published
+    //   usb      - secure USB only
+    //
+    // "usb" serves the cameras straight from the encoder over USB and
+    // confines the TCP servers to 127.0.0.1, where the USB transport reaches
+    // control and update. The update server is the exception -- see
+    // recovery_update below.
+    //
+    // Distinct from `listen`, which selects *which network* the TCP servers
+    // use (its "usb" value means the CDC-NCM gadget network, not this).
+    // One transport serves video at a time; "both" is rejected at load.
+    std::string transports = "usb";
+    // Recovery update channel.
+    //
+    // With transports=usb everything else is confined to loopback, so a
+    // secure USB transport that fails to come up would leave no way to push
+    // firmware -- the device would be unrecoverable in the field. When on
+    // (the default) the update server additionally binds the CDC-NCM gadget
+    // address, which rides the same physical cable, so a broken secure
+    // transport is still recoverable. Set off only where the update path is
+    // provided some other way.
+    bool recovery_update = true;
     // RTP transport(s) the RTSP server offers: tcp (interleaved in the
     // RTSP connection, default -- survives hosts that drop unsolicited
     // inbound UDP), udp, or all (client picks; gst clients prefer UDP).
     std::string transport = "tcp";
-    // TCP control server (proto/PROTOCOL.md), bound to the same address as
+    // TCP control server (docs/PROTOCOL.md), bound to the same address as
     // the RTSP server. 0 disables it.
     int control_port = proto::kControlPort;
     // UDP discovery responder (always 0.0.0.0). 0 disables it.
@@ -76,6 +100,32 @@ struct Config {
     std::string tls_cert;  // PEM server certificate path
     std::string tls_key;   // PEM server private key path
     std::string tls_ca;    // PEM CA bundle for client verification
+
+    // On-device face detection (OpenCV YuNet on the GPU). Always on when the
+    // model file exists: each secure-USB camera pipeline then grows a raw
+    // branch and a detection thread that emits face boxes over the metadata
+    // channel, and the host draws the overlay. No separate enable flag -- the
+    // model's presence (an image build choice, CAMERA_FACE_MODEL) is the
+    // switch. detect_width is the detector's working width.
+    std::string detect_model = "/usr/share/camera-streamer/face_detection_yunet.onnx";
+    // Detector working width. The height is not configurable: it follows the
+    // camera's aspect ratio, because squashing the frame to a fixed shape
+    // distorts faces and YuNet then misses them.
+    int detect_width = 320;
+    // Minimum YuNet confidence for a face to be reported. Reference figures
+    // (same frame + same model replayed on a dev host, NOT the device's
+    // CUDA runtime, so treat as indicative): with the corrected ISP
+    // (opticalBlack=120) real faces scored 0.52-0.72; the same scene before
+    // the ISP fix scored 0.32. The old built-in 0.6 rejected everything
+    // pre-fix and still clips the weaker half of real detections.
+    double detect_score = 0.45;
+    // Detections per second. Deliberately far below the 60 fps capture rate:
+    // boxes are only useful at UI refresh rates, and each detection costs a
+    // VIC scale+download plus a GPU inference. Measured on target, running the
+    // branch unthrottled held VIC ~70% and GR3D ~40% continuously -- heat and
+    // power for frames nobody looked at. 0 disables the limit.
+    int detect_fps = 10;
+
     CameraConfig cameras[kNumCameras];
 };
 

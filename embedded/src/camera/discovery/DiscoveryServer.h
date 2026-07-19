@@ -1,4 +1,4 @@
-// UDP discovery responder (proto/PROTOCOL.md "Discovery"): answers
+// UDP discovery responder (docs/PROTOCOL.md "Discovery"): answers
 // {"method":"discover"} broadcasts with device/port info, so the host UI
 // can find cameras instead of assuming 192.168.55.1.
 #pragma once
@@ -6,8 +6,8 @@
 #include <gio/gio.h>
 
 #include "camera/config/Config.h"
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
 
 namespace camera {
 
@@ -21,7 +21,7 @@ public:
 
     // Binds 0.0.0.0:discovery-port (broadcasts don't arrive on a specific
     // address, and the reply only reveals what a port scan would).
-    folly::Expected<folly::Unit, std::string> start();
+    camera::base::Expected<camera::base::Unit, std::string> start();
 
 private:
     static gboolean on_datagram(GSocket* socket, GIOCondition condition,

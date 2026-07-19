@@ -5,6 +5,8 @@
 // class. Delegates per-camera state to MountController instances.
 #pragma once
 
+#include "camera/detect/MetaSink.h"
+
 #include <gst/rtsp-server/rtsp-server.h>
 
 #include <array>
@@ -17,14 +19,18 @@
 #include "camera/pipeline/CameraSource.h"
 #include "camera/pipeline/SourceFactory.h"
 #include "camera/rtsp/MountController.h"
-#include "camera/folly/Expected.h"
-#include "camera/folly/Unit.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
 
 namespace camera {
 
 class RtspServer : public IStreamController {
 public:
-    explicit RtspServer(const Config& config, ISourceFactory& source_factory);
+    // Where detection boxes go in network mode. Must be set before start();
+    // null leaves detection off, which is what a build without a model does.
+    void set_meta_sink(detect::IMetaSink* meta) { meta_sink_ = meta; }
+
+    explicit RtspServer(const Config& config);
     ~RtspServer();
 
     RtspServer(const RtspServer&) = delete;
@@ -32,7 +38,7 @@ public:
 
     // Creates the media factories and attaches the server to the default
     // GMainContext. Returns false if no camera is enabled or attach fails.
-    folly::Expected<folly::Unit, std::string> start();
+    camera::base::Expected<camera::base::Unit, std::string> start();
 
     // IStreamController
     const std::string& bound_address() const override { return address_; }
@@ -54,7 +60,8 @@ private:
     void disable_mount(int cam);
 
     const Config& config_;
-    ISourceFactory& source_factory_;
+    // Where network-mode detection boxes go; null leaves detection off.
+    detect::IMetaSink* meta_sink_ = nullptr;
     std::string address_;
     GstRTSPServer* server_ = nullptr;
     guint attach_id_ = 0;

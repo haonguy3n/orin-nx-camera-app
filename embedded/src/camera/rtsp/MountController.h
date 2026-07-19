@@ -8,6 +8,9 @@
 // all mounts' internal state).
 #pragma once
 
+#include <thread>
+#include "camera/detect/MetaSink.h"
+
 #include <gst/rtsp-server/rtsp-server.h>
 
 #include <atomic>
@@ -24,6 +27,15 @@ constexpr int kStallChecks = 3;
 
 class MountController {
 public:
+    // Runs face detection on this mount's "detect" appsink, when the launch
+    // string carries one (see PipelineBuilder::nvenc_tail_with_detect).
+    // Detection is per-media: gst-rtsp-server builds the pipeline on client
+    // connect, so this starts when a client arrives and stops when the media
+    // goes away -- the same "no session, no detection" property the USB path
+    // has. `meta` receives to_meta_json payloads from the detection thread.
+    void enable_detection(detect::IMetaSink* meta, std::string model,
+                          int width, int height, double score, int fps);
+
     MountController(int index, const std::string& mount_path);
     ~MountController();
 
@@ -74,7 +86,16 @@ private:
     bool dead_ = false;  // stalled and disabled by the watchdog
     GstRTSPMediaFactory* factory_ = nullptr;  // ref held for refresh_launch
     GWeakRef media_;   // live GstRTSPMedia (shared factory: one at a time)
-    GWeakRef source_;  // "camsrc" element inside the live pipeline
+    GWeakRef source_;
+    // Detection config, applied to each media as it is configured.
+    detect::IMetaSink* meta_sink_ = nullptr;
+    std::string detect_model_;
+    int detect_width_ = 0, detect_height_ = 0, detect_fps_ = 10;
+    double detect_score_ = 0.45;
+    std::atomic<bool> detect_stop_{false};
+    std::thread detect_thread_;
+    void start_detection(GstElement* bin);
+    void stop_detection();  // "camsrc" element inside the live pipeline
     std::atomic<guint64> frames_{0};
     // Last-frame metadata, written by the streaming thread's pad probe.
     std::atomic<guint64> last_sequence_{0};

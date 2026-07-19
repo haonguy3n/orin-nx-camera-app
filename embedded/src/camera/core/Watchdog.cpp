@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 

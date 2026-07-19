@@ -9,7 +9,12 @@ LICENSE = "CLOSED"
 
 PV = "0.4"
 
-inherit cmake pkgconfig systemd externalsrc
+# cuda: the image's OpenCV is built WITH_CUDA (for the DNN CUDA backend that
+# face detection uses), so its OpenCVConfig.cmake forces find_package(CUDA) on
+# any consumer. inherit cuda puts CUDA_TOOLKIT_ROOT_DIR into the cmake
+# configure and DEPENDS the CUDA libraries, satisfying that -- even though this
+# app compiles no CUDA of its own (it calls OpenCV at runtime).
+inherit cmake pkgconfig systemd externalsrc cuda
 
 # The application sources live in the same git repository as this layer:
 #   <repo>/yocto/meta-vc-camera  (this layer, VC_CAMERA_LAYERDIR)
@@ -29,7 +34,7 @@ inherit cmake pkgconfig systemd externalsrc
 EXTERNALSRC = "${@os.path.normpath(os.path.join(os.path.realpath(d.getVar('VC_CAMERA_LAYERDIR')), '..', '..'))}"
 OECMAKE_SOURCEPATH = "${EXTERNALSRC}/embedded"
 
-# json-glib + glib (gio) serve the TCP control protocol (proto/PROTOCOL.md).
+# json-glib + glib (gio) serve the TCP control protocol (docs/PROTOCOL.md).
 # swupdate is needed at runtime for OTA firmware updates (the app talks to
 # swupdate's IPC socket at /tmp/sockinstctrl); it's in RDEPENDS, not DEPENDS,
 # because the app defines the IPC structs locally (no swupdate headers/libs
@@ -40,6 +45,8 @@ DEPENDS = " \
     gstreamer1.0-plugins-base \
     gstreamer1.0-rtsp-server \
     json-glib \
+    openssl \
+    opencv \
 "
 
 # Pipeline runtime elements: rtph265pay lives in -good (rtp), h265parse in
@@ -54,10 +61,13 @@ DEPENDS = " \
 # a broken media graph (GST_IS_ELEMENT assertion cascade, no data).
 # glib-networking: GIO TLS backend for the control/update servers'
 # [server] tls-* support. openssl-bin: first-boot device cert generation
-# (camera-streamer-gencert.service).
+# (camera-streamer-gencert.service). gstreamer1.0: not required by the
+# application (secure USB builds its per-camera H.265 pipeline in-process),
+# but gst-launch-1.0 is what makes a broken mount diagnosable on target.
 RDEPENDS:${PN} += " \
     glib-networking \
     openssl-bin \
+    gstreamer1.0 \
     gstreamer1.0-plugins-base-app \
     gstreamer1.0-plugins-good-rtp \
     gstreamer1.0-plugins-good-rtpmanager \
@@ -71,6 +81,7 @@ RDEPENDS:${PN} += " \
 # Pin the unit install dir: systemd.pc is not in this recipe's sysroot, so
 # CMake's fallback (/usr/lib/systemd/system) would mismatch systemd_system_unitdir.
 EXTRA_OECMAKE += "-DSYSTEMD_SYSTEM_UNITDIR=${systemd_system_unitdir}"
+EXTRA_OECMAKE += "-DENABLE_SECURE_USB=ON"
 
 SYSTEMD_SERVICE:${PN} = "camera-streamer.service camera-streamer-gencert.service"
 SYSTEMD_AUTO_ENABLE = "enable"

@@ -8,7 +8,7 @@ Jetson ISP tuning has three layers; this recipe covers the middle one.
 
 1. **Runtime controls** — white balance, saturation, TNR/EE, AE
    antibanding, exposure compensation. Already supported: `set-isp` in the
-   control protocol (`proto/PROTOCOL.md`), the ISP group in the host UI, and
+   control protocol (`docs/PROTOCOL.md`), the ISP group in the host UI, and
    `isp-*` keys in `/etc/camera-streamer.conf`. Nothing to do here.
 2. **Static tuning file** (`camera_overrides.isp`) — lens shading, color
    correction matrix, gamma, demosaic parameters. libargus loads it from

@@ -1,6 +1,7 @@
 #include "controlpanel.h"
 
 #include <QCheckBox>
+#include <QFrame>
 #include <QLabel>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -14,20 +15,32 @@ ControlPanel::ControlPanel(QWidget *parent)
 {
     setFrameShape(QFrame::NoFrame);
     setWidgetResizable(true);
-    setMinimumWidth(340);
-    setFixedWidth(360);
+    setObjectName(QStringLiteral("controlPanel"));
+    viewport()->setObjectName(QStringLiteral("controlPanelViewport"));
+    setMinimumWidth(350);
+    setFixedWidth(380);
 
     auto *panel = new QWidget;
-    panel->setMinimumWidth(340);
+    panel->setObjectName(QStringLiteral("controlPanelBody"));
+    panel->setMinimumWidth(350);
 
     auto *layout = new QVBoxLayout(panel);
-    layout->setSpacing(2);
-    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
+    layout->setContentsMargins(12, 12, 12, 12);
+
+    auto *heading = new QLabel(QStringLiteral("Device controls"), panel);
+    heading->setObjectName(QStringLiteral("panelTitle"));
+    auto *hint = new QLabel(
+        QStringLiteral("Configuration and diagnostics"), panel);
+    hint->setObjectName(QStringLiteral("subtitle"));
+    layout->addWidget(heading);
+    layout->addWidget(hint);
+    layout->addSpacing(4);
 
     // Device section: control channel state, per-camera poll results,
     // sync trigger, calibrate button, and the last request error.
     auto *deviceSection = new CollapsibleSection(
-        QStringLiteral("DEVICE"), panel);
+        QStringLiteral("Device status"), panel);
     auto *statusLayout = new QVBoxLayout(deviceSection->contentWidget());
     statusLayout->setSpacing(6);
     statusLayout->setContentsMargins(10, 8, 10, 8);
@@ -95,7 +108,7 @@ ControlPanel::ControlPanel(QWidget *parent)
 
     // OTA update section.
     auto *updateSection = new CollapsibleSection(
-        QStringLiteral("FIRMWARE UPDATE"), panel);
+        QStringLiteral("Firmware update"), panel);
     m_updateWidget = new UpdateWidget(updateSection->contentWidget());
     auto *updateLayout = new QVBoxLayout(updateSection->contentWidget());
     updateLayout->setSpacing(6);

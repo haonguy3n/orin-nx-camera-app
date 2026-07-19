@@ -1,6 +1,6 @@
 // Control handler interface (Command pattern) and context.
 //
-// Each control protocol method (proto/PROTOCOL.md) is implemented as a
+// Each control protocol method (docs/PROTOCOL.md) is implemented as a
 // separate IControlHandler class. The ControlRegistry maps method names
 // to handler instances, replacing the original 370-line dispatch() if-else
 // chain. This satisfies OCP (new method = new handler class + register
@@ -19,7 +19,7 @@
 #include "camera/pipeline/SourceFactory.h"
 #include "camera/update/SwupdateClient.h"
 #include "camera/lib/v4l2/V4l2Device.h"
-#include "camera/folly/Expected.h"
+#include "camera/base/Expected.h"
 
 namespace camera {
 
@@ -28,10 +28,11 @@ namespace camera {
 struct ControlContext {
     Config& config;
     IStreamController& stream;
-    IV4l2DeviceFactory& v4l2_factory;
-    ISourceFactory& source_factory;
     SwupdateClient& swupdate;
     std::function<void()> reload;
+    // Set by the application when a transport (secure USB) carries live
+    // per-camera streams that a config flag alone cannot stop.
+    std::function<void(int camera, bool enabled)> notify_stream;
 };
 
 // A failed control call: JSON-RPC style code + human-readable message.
@@ -41,7 +42,7 @@ struct ControlError {
 };
 
 // Result of a control call: the result node (transfer full) or an error.
-using HandlerResult = folly::Expected<JsonNode*, ControlError>;
+using HandlerResult = camera::base::Expected<JsonNode*, ControlError>;
 
 // Interface for one control protocol method handler.
 class IControlHandler {

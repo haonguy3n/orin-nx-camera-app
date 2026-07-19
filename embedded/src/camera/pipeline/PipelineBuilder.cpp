@@ -36,6 +36,62 @@ std::string PipelineBuilder::nvenc_tail(const CameraConfig& cam) {
     return s;
 }
 
+std::string PipelineBuilder::nvenc_tail_with_detect(const CameraConfig& cam,
+                                                    int detect_width,
+                                                    int detect_height) {
+    // The RTSP payloader keeps its name; detection hangs off a second tee leg.
+    // Detection is best-effort here exactly as it is on the USB path: the
+    // branch leaks (leaky queue) rather than backpressuring the tee into the
+    // encoder that RTSP clients are watching.
+    return "tee name=t  t. ! " + nvenc_tail(cam) + "  t. ! " +
+           detect_branch(detect_width, detect_height);
+}
+
+std::string PipelineBuilder::detect_branch(int width, int height) {
+    // NVMM -> CPU BGRx via nvvidconv, straight into the appsink. Named
+    // "detect" so Pipeline can find it.
+    //
+    // leaky=downstream on this queue is essential, not cosmetic: without it a
+    // slow detector (YuNet warmup, inference) fills the queue and backpressures
+    // THROUGH THE TEE into the encode branch, stalling the video the host
+    // actually watches. Leaky drops old frames on this branch so detection is
+    // best-effort and can never block video. max-size-buffers=1 also keeps
+    // Argus NVMM buffers from being held here.
+    // nvvidconv does the resize as well as the NVMM->CPU download. It has to:
+    // a plain colour converter cannot rescale, so width/height must ride on
+    // nvvidconv's output caps.
+    //
+    // drop=false is deliberate and is what keeps the sensor cool. With
+    // drop=true the appsink accepts every frame and throws it away, so
+    // nvvidconv scaled and downloaded all 60 fps regardless of how often the
+    // detector actually looked -- measured on target as VIC ~70% and GR3D
+    // ~40% continuously. Blocking instead means nvvidconv only converts when
+    // the detector takes a frame, so the branch costs what detection actually
+    // uses. Video is unaffected: the leaky queue above drops rather than
+    // backpressuring the tee, which is why that queue is load-bearing here.
+    //
+    // async=false is what makes the leaky queue above safe. A sink normally
+    // gates the pipeline's async state change until it prerolls one buffer --
+    // but leaky=downstream drops exactly that buffer, so this appsink never
+    // prerolls and the WHOLE pipeline stays stuck in PAUSED: no video on the
+    // encode branch either, and teardown of a stuck pipeline is what makes
+    // restarts crawl. async=false takes this sink out of the state change, so
+    // the detect branch can stall or drop freely without touching video.
+    // No videoconvert: it is NOT in the device image (only the nv* GStreamer
+    // plugin packages are installed), and gst_parse_launch answers a missing
+    // element with a PARTIAL pipeline plus a non-fatal error -- so this whole
+    // branch was being dropped while "sink" survived. Video streamed perfectly
+    // and detection silently never ran. nvvidconv emits system-memory BGRx by
+    // itself, so the branch ends at the appsink and the detector drops the
+    // padding byte (cheaper than a CPU colour conversion anyway).
+    return "queue leaky=downstream max-size-buffers=1"
+           " ! nvvidconv ! video/x-raw,format=BGRx"
+           ",width=" + std::to_string(width) +
+           ",height=" + std::to_string(height) +
+           " ! appsink name=detect sync=false async=false"
+           " max-buffers=1 drop=false";
+}
+
 std::string PipelineBuilder::zoom_crop(const CameraConfig& cam) {
     if (cam.zoom <= 1.0)
         return "";

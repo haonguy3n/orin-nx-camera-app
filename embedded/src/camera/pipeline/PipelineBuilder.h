@@ -25,6 +25,22 @@ public:
     // encoder the NVMM buffer pool starves after the first frame.
     static std::string nvenc_tail(const CameraConfig& cam);
 
+    // nvenc_tail with a detection branch teed off alongside the payloader, for
+    // face detection in network mode. gst-rtsp-server only requires that a
+    // "pay0" element exists in the launch string; anything else in the bin is
+    // its business, so the detect appsink can sit beside it. MountController
+    // picks the appsink up on media-configure, the same hook it already uses
+    // for the source element.
+    static std::string nvenc_tail_with_detect(const CameraConfig& cam,
+                                              int detect_width,
+                                              int detect_height);
+
+    // A raw-BGR branch (`appsink name=detect`) at the given detector working
+    // resolution, for the face-detection tap in network mode. The usb
+    // transport builds the equivalent branch as typed objects
+    // (media::CameraPipeline::build).
+    static std::string detect_branch(int width, int height);
+
     // Crop rectangle for digital zoom. nvvidconv's left/right/top/bottom
     // are coordinates of the crop rectangle on its input; even values keep
     // NV12 chroma alignment. Empty at zoom 1 (converter not inserted).

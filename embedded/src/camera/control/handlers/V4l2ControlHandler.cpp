@@ -9,15 +9,12 @@ namespace camera {
 HandlerResult ListControlsHandler::handle(JsonObject* params, ControlContext& ctx) {
     auto cam_idx = require_camera(params);
     if (!cam_idx) {
-        return folly::makeUnexpected(cam_idx.error());
+        return camera::base::makeUnexpected(cam_idx.error());
     }
-    auto dev = ctx.v4l2_factory.open(ctx.config.cameras[*cam_idx].device);
-    if (!dev) {
-        return folly::makeUnexpected(ControlError{kFailed, ctx.config.cameras[*cam_idx].device + ": cannot open device"});
-    }
-    auto ctrls = dev->list_controls();
+    V4l2Device dev(ctx.config.cameras[*cam_idx].device);
+    auto ctrls = dev.list_controls();
     if (!ctrls) {
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             ControlError{kFailed, std::move(ctrls.error())});
     }
     JsonBuilder* b = json_builder_new();
@@ -34,19 +31,16 @@ HandlerResult ListControlsHandler::handle(JsonObject* params, ControlContext& ct
 HandlerResult GetControlHandler::handle(JsonObject* params, ControlContext& ctx) {
     auto cam_idx = require_camera(params);
     if (!cam_idx) {
-        return folly::makeUnexpected(cam_idx.error());
+        return camera::base::makeUnexpected(cam_idx.error());
     }
     std::string control;
     if (!param_control(params, &control)) {
-        return folly::makeUnexpected(ControlError{kInvalidParams, "control must be a name or numeric id"});
+        return camera::base::makeUnexpected(ControlError{kInvalidParams, "control must be a name or numeric id"});
     }
-    auto dev = ctx.v4l2_factory.open(ctx.config.cameras[*cam_idx].device);
-    if (!dev) {
-        return folly::makeUnexpected(ControlError{kFailed, ctx.config.cameras[*cam_idx].device + ": cannot open device"});
-    }
-    auto c = dev->get_control(control);
+    V4l2Device dev(ctx.config.cameras[*cam_idx].device);
+    auto c = dev.get_control(control);
     if (!c) {
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             ControlError{kFailed, std::move(c.error())});
     }
     JsonBuilder* b = json_builder_new();
@@ -57,23 +51,20 @@ HandlerResult GetControlHandler::handle(JsonObject* params, ControlContext& ctx)
 HandlerResult SetControlHandler::handle(JsonObject* params, ControlContext& ctx) {
     auto cam_idx = require_camera(params);
     if (!cam_idx) {
-        return folly::makeUnexpected(cam_idx.error());
+        return camera::base::makeUnexpected(cam_idx.error());
     }
     std::string control;
     if (!param_control(params, &control)) {
-        return folly::makeUnexpected(ControlError{kInvalidParams, "control must be a name or numeric id"});
+        return camera::base::makeUnexpected(ControlError{kInvalidParams, "control must be a name or numeric id"});
     }
     int64_t value;
     if (!param_int(params, "value", &value)) {
-        return folly::makeUnexpected(ControlError{kInvalidParams, "value must be an integer"});
+        return camera::base::makeUnexpected(ControlError{kInvalidParams, "value must be an integer"});
     }
-    auto dev = ctx.v4l2_factory.open(ctx.config.cameras[*cam_idx].device);
-    if (!dev) {
-        return folly::makeUnexpected(ControlError{kFailed, ctx.config.cameras[*cam_idx].device + ": cannot open device"});
-    }
-    auto r = dev->set_control(control, value);
+    V4l2Device dev(ctx.config.cameras[*cam_idx].device);
+    auto r = dev.set_control(control, value);
     if (!r) {
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             ControlError{kFailed, std::move(r.error())});
     }
     return empty_result();

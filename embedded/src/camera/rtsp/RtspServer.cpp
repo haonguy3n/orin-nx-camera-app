@@ -1,12 +1,18 @@
 #include "camera/rtsp/RtspServer.h"
 
+#include <unistd.h>
+
+#include <algorithm>
+
+#include "camera/pipeline/PipelineBuilder.h"
+
 #include <glib.h>
 
 #include <string>
 
 #include "camera/lib/net/NetworkResolver.h"
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 
@@ -20,8 +26,8 @@ const char* client_ip(GstRTSPClient* client) {
 
 }  // namespace
 
-RtspServer::RtspServer(const Config& config, ISourceFactory& source_factory)
-    : config_(config), source_factory_(source_factory) {
+RtspServer::RtspServer(const Config& config)
+    : config_(config) {
     for (int i = 0; i < Config::kNumCameras; ++i)
         mounts_[i] = std::make_unique<MountController>(
             i, "/cam" + std::to_string(i));
@@ -56,10 +62,10 @@ RtspServer::~RtspServer() {
     // mounts_ unique_ptrs clean up themselves.
 }
 
-folly::Expected<folly::Unit, std::string> RtspServer::start() {
+camera::base::Expected<camera::base::Unit, std::string> RtspServer::start() {
     address_ = NetworkResolver::resolve_listen(config_.listen);
     if (address_.empty()) {
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             "listen=" + config_.listen +
             ": no usable IPv4 address (interface down or no address yet?)");
     }
@@ -75,14 +81,43 @@ folly::Expected<folly::Unit, std::string> RtspServer::start() {
         if (!cam.enabled)
             continue;
 
-        auto source = source_factory_.create(cam.source);
+        auto source = create_source(cam.source);
         if (!source) {
             XLOGF(WARN, "cam%d: unknown source '%s', skipping", i,
                       cam.source.c_str());
             continue;
         }
 
-        const std::string launch = source->build_launch(cam);
+        std::string launch = source->build_launch(cam);
+        // Face detection in network mode: tee a detect branch off alongside
+        // the RTP payloader. gst-rtsp-server only requires that "pay0" exists,
+        // so the appsink can live in the same bin; MountController picks it up
+        // on media-configure. Same swap trick the USB launch uses, so the
+        // source builders stay unaware of detection.
+        if (meta_sink_ != nullptr && !config_.detect_model.empty() &&
+            access(config_.detect_model.c_str(), R_OK) == 0) {
+            const std::string plain = PipelineBuilder::nvenc_tail(cam);
+            const size_t at = launch.rfind(plain);
+            if (at != std::string::npos) {
+                const int detect_h =
+                    cam.width > 0
+                        ? std::max(2, static_cast<int>(
+                                          static_cast<long long>(
+                                              config_.detect_width) *
+                                          cam.height / cam.width) & ~1)
+                        : config_.detect_width;
+                launch.replace(at, plain.size(),
+                               PipelineBuilder::nvenc_tail_with_detect(
+                                   cam, config_.detect_width, detect_h));
+                mounts_[i]->enable_detection(meta_sink_, config_.detect_model,
+                                             config_.detect_width, detect_h,
+                                             config_.detect_score,
+                                             config_.detect_fps);
+                XLOGF(INFO, "rtsp: cam%d detection enabled (%dx%d, score>=%.2f,"
+                            " %d fps)", i, config_.detect_width, detect_h,
+                      config_.detect_score, config_.detect_fps);
+            }
+        }
 
         // Offered RTP transports. TCP-interleaved by default: hosts with
         // stateful inbound-UDP filtering silently lose UDP RTP (server
@@ -109,7 +144,7 @@ folly::Expected<folly::Unit, std::string> RtspServer::start() {
     g_object_unref(mounts);
 
     if (enabled == 0) {
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             std::string("no cameras enabled, nothing to serve"));
     }
 
@@ -131,7 +166,7 @@ folly::Expected<folly::Unit, std::string> RtspServer::start() {
 
     attach_id_ = gst_rtsp_server_attach(server_, nullptr);
     if (attach_id_ == 0) {
-        return folly::makeUnexpected("failed to attach RTSP server on " +
+        return camera::base::makeUnexpected("failed to attach RTSP server on " +
                                      address_ + ":" +
                                      std::to_string(config_.port));
     }
@@ -140,7 +175,7 @@ folly::Expected<folly::Unit, std::string> RtspServer::start() {
     XLOGF(INFO, "RTSP server listening on rtsp://%s:%d (listen=%s, %d stream%s)",
               address_.c_str(), config_.port, config_.listen.c_str(), enabled,
               enabled == 1 ? "" : "s");
-    return folly::unit;
+    return camera::base::unit;
 }
 
 gboolean RtspServer::on_watchdog(gpointer user_data) {
@@ -184,7 +219,7 @@ StreamStatus RtspServer::stream_status(int cam) {
 }
 
 void RtspServer::refresh_launch(int cam) {
-    auto source = source_factory_.create(config_.cameras[cam].source);
+    auto source = create_source(config_.cameras[cam].source);
     if (!source)
         return;
     const std::string launch = source->build_launch(config_.cameras[cam]);

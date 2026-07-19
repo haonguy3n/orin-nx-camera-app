@@ -2,3 +2,10 @@ host-ui/build/
 embedded/build/
 
 oe-*
+
+# Provisioned certs/keys must never be committed (scripts/provision-device-cert.sh)
+*.key
+*.crt
+*.csr
+*.srl
+

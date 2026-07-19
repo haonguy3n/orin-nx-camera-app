@@ -4,7 +4,7 @@
 
 #include "camera/control/JsonUtil.h"
 
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/logging/xlog.h"
 
 namespace camera {
 
@@ -55,22 +55,22 @@ ControlServer::~ControlServer() {
     conns_.clear();
 }
 
-folly::Expected<folly::Unit, std::string> ControlServer::start(
+camera::base::Expected<camera::base::Unit, std::string> ControlServer::start(
     const std::string& address, int port) {
-    auto tls = folly::SSLContext::create(context_.config.tls_cert,
+    auto tls = camera::base::SSLContext::create(context_.config.tls_cert,
                                          context_.config.tls_key,
                                          context_.config.tls_ca);
     if (!tls)
-        return folly::makeUnexpected("control: " + tls.error());
+        return camera::base::makeUnexpected("control: " + tls.error());
     tls_ = std::move(*tls);
 
     if (auto r = socket_.bind(address, port); !r)
-        return folly::makeUnexpected("control: " + r.error());
+        return camera::base::makeUnexpected("control: " + r.error());
     socket_.addAcceptCallback(
         [this](GSocketConnection* connection) { accept_connection(connection); });
     socket_.startAccepting();
     XLOGF(INFO, "control server listening on %s:%d", address.c_str(), port);
-    return folly::unit;
+    return camera::base::unit;
 }
 
 void ControlServer::accept_connection(GSocketConnection* connection) {
@@ -137,9 +137,13 @@ void ControlServer::on_line(GObject* source, GAsyncResult* result,
                                         conn->cancellable, on_line, conn);
 }
 
-void ControlServer::process_line(Conn* conn, const char* line) {
+// Request line -> reply line. Shared by the TCP control server and the
+// secure-USB transport, which dispatches in-process instead of looping a
+// socket back to 127.0.0.1 just to reach the same handlers.
+std::string dispatch_request(ControlRegistry& registry_,
+                             ControlContext& context_, const char* line) {
     if (*line == '\0')
-        return;  // ignore blank lines (nc users)
+        return {};  // blank lines (nc users) get no reply
 
     JsonNode* id = nullptr;      // borrowed from the parsed tree
     JsonNode* res = nullptr;     // transfer full
@@ -222,6 +226,24 @@ void ControlServer::process_line(Conn* conn, const char* line) {
     json_node_unref(reply);
     g_object_unref(parser);
 
+    return out;
+}
+void ControlServer::broadcast(const std::string& line) {
+    if (line.empty() || conns_.empty()) return;
+    const std::string out = line.back() == '\n' ? line : line + "\n";
+    for (Conn* conn : conns_) {
+        // Best-effort: a client that cannot keep up is not worth failing the
+        // detector over, and boxes are droppable by nature.
+        g_output_stream_write_all(g_io_stream_get_output_stream(conn->io),
+                                  out.data(), out.size(), nullptr, nullptr,
+                                  nullptr);
+    }
+}
+
+void ControlServer::process_line(Conn* conn, const char* line) {
+    const std::string out = dispatch_request(registry_, context_, line);
+    if (out.empty())
+        return;
     g_output_stream_write_all(
         g_io_stream_get_output_stream(conn->io), out.data(),
         out.size(), nullptr, nullptr, nullptr);

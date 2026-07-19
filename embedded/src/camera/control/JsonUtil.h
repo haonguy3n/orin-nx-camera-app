@@ -39,7 +39,7 @@ bool param_camera(JsonObject* params, int* out);
 
 // param_camera() with the canonical kInvalidParams error shared by every
 // camera-addressed handler.
-folly::Expected<int, ControlError> require_camera(JsonObject* params);
+camera::base::Expected<int, ControlError> require_camera(JsonObject* params);
 
 /// @}
 

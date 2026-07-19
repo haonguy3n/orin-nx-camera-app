@@ -28,13 +28,13 @@
 #include <cstddef>
 #include <string>
 
-#include "camera/folly/Expected.h"
-#include "camera/folly/File.h"
-#include "camera/folly/Synchronized.h"
+#include "camera/base/Expected.h"
+#include "camera/base/File.h"
+#include "camera/base/Synchronized.h"
 
 namespace camera {
 
-/// folly::writeFull semantics for sockets: send() with MSG_NOSIGNAL so a
+/// camera::base::writeFull semantics for sockets: send() with MSG_NOSIGNAL so a
 /// peer that dies mid-write (e.g. swupdate crashing) yields EPIPE instead
 /// of a process-killing SIGPIPE (this app installs no SIGPIPE handler).
 /// ponytail: lives here, not folly/FileUtil.h, to keep the vendored mimic
@@ -63,7 +63,7 @@ struct UpdateStatus {
 };
 
 /// SWUpdate IPC client. Thread-safe: install runs on a detached background
-/// thread, status lives in a folly::Synchronized and is readable from any
+/// thread, status lives in a camera::base::Synchronized and is readable from any
 /// thread. Threads are deliberately detached: this object must outlive any
 /// in-flight install (it lives in Application for the process lifetime).
 class SwupdateClient {
@@ -84,7 +84,7 @@ public:
     /// all data is written, the caller must close the File and call
     /// end_stream_install() to start status polling. No temp file
     /// needed — data goes directly to swupdate.
-    folly::Expected<folly::File, std::string> begin_stream_install();
+    camera::base::Expected<camera::base::File, std::string> begin_stream_install();
 
     /// Called after the caller has written all data and closed the fd
     /// from begin_stream_install(). Starts a background thread that polls
@@ -108,7 +108,7 @@ private:
     void set_state(UpdateState state);
     void fail(const std::string& error);  ///< error + state=Failure, one lock
 
-    folly::Synchronized<UpdateStatus> status_;
+    camera::base::Synchronized<UpdateStatus> status_;
 };
 
 }  // namespace camera

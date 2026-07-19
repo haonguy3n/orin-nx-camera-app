@@ -76,10 +76,10 @@ bool param_camera(JsonObject* params, int* out) {
     return true;
 }
 
-folly::Expected<int, ControlError> require_camera(JsonObject* params) {
+camera::base::Expected<int, ControlError> require_camera(JsonObject* params) {
     int idx;
     if (!param_camera(params, &idx)) {
-        return folly::makeUnexpected(
+        return camera::base::makeUnexpected(
             ControlError{kInvalidParams, "camera must be 0 or 1"});
     }
     return idx;

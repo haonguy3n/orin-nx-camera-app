@@ -1,0 +1,162 @@
+# host-ui — camera-viewer
+
+Host-side viewer and device control for the dual-camera device (see
+`DESIGN.md` sections 4–5, `TRANSPORT-ARCHITECTURE.md`). Qt 6 Widgets, no
+QML. Each pane is a `FrameView` that paints the video frame and the
+face-detection boxes in one pass (QVideoWidget was dropped — overlaying
+on it fought the compositor). Network-mode RTSP is decoded by
+QMediaPlayer's FFmpeg backend; the secure USB stream is decoded
+in-process by GStreamer (`avdec_h265`, gst-libav).
+
+## Device addressing
+
+The device enumerates as a USB network interface (CDC-NCM):
+
+- device: `192.168.55.1` (RTSP server on port 8554, mounts `/cam0`, `/cam1`)
+- host:   `192.168.55.100` (assigned by the device's dnsmasq)
+
+The URL bar accepts either a bare host/IP (`192.168.55.1` → default port 8554
+and mounts) or an `rtsp://host:port` base URL. **Discover** (next to Connect)
+broadcasts a UDP discovery request on port **8556** (`PROTOCOL.md`,
+"Discovery") and fills the host box with the replying device's address; if
+several devices answer, a popup menu on the button lets you pick one.
+
+## Build
+
+Requires: CMake ≥ 3.16, a C++20 compiler, Qt 6 with the Widgets, Multimedia,
+MultimediaWidgets and Network modules, libusb, OpenSSL, and the GStreamer
+app library plus gst-libav at runtime (Arch: `qt6-base qt6-multimedia
+libusb openssl gstreamer gst-plugins-base gst-libav`; make sure the FFmpeg
+backend package `qt6-multimedia-ffmpeg` is installed).
+
+`host-ui/build.sh` wraps configure + build, checks the tools, locates a
+secure-USB trust anchor, and (with `run`) kills stale viewer instances
+before launching — a second viewer's SET_INTERFACE resets the USB
+endpoints under the first:
+
+```sh
+cd host-ui && ./build.sh run
+```
+
+## Run
+
+1. Plug in the device; wait for the USB network interface (host should get
+   `192.168.55.100`, `ping 192.168.55.1` works).
+2. Start `camera-viewer`, leave `192.168.55.1` in the URL bar, choose a
+   camera, then click **Connect**. The selected stream opens immediately;
+   selecting the other camera opens that stream on demand. This keeps a
+   failed camera from affecting the healthy stream. Click **Disconnect**
+   then **Connect** to reconnect (or press Enter in the URL bar to reconnect
+   immediately).
+
+### Transport selection
+
+The toolbar offers three connection modes:
+
+- **Auto** (default) starts the in-process secure USB bridge. If no secure USB
+  device is enumerated, it falls back to the normal CDC-NCM/ethernet address.
+  It does not fall back after a secure-device authentication failure.
+- **Network** always connects directly to the entered device address.
+- **Secure USB** requires the authenticated USB device and uses the local
+  proxy at `127.0.0.1`; no device IP is used for video or control.
+
+The secure transport pins the device certificate selected during pairing. A
+certificate mismatch is an authentication failure and never falls back to
+plaintext networking.
+
+`CAMERA_SECURE_USB_CERT` points at the trust anchor PEM (an absolute
+path -- it is passed to `fopen` unexpanded, so `~` does not work).
+Either works:
+
+- `ca.crt` — any camera signed by that CA is accepted
+  (`scripts/provision-device-cert.sh --device-id <id> --out
+  ~/camera-certs/<id>`)
+- `server.crt` — that one device only, i.e. certificate pinning:
+
+```sh
+scp root@192.168.55.1:/etc/camera-streamer/tls/server.crt ~/.config/camera-viewer/device.crt
+CAMERA_SECURE_USB_CERT=$HOME/.config/camera-viewer/device.crt ./camera-viewer
+```
+
+`build.sh run` finds the anchor automatically in the usual locations
+(`~/camera-certs/*/ca.crt`, `~/.config/camera-viewer/`); an unfound
+anchor is reported, never silently skipped.
+
+The in-process bridge claims only the vendor interface. Video arrives as an
+encrypted H.265 elementary stream and is decoded in-process straight into the
+panes (no local RTSP hop); control and update are exposed as authenticated
+local proxies on 127.0.0.1 ports 8555 and 8557.
+
+Claiming the interface needs `70-camera-secure-usb.rules` installed into
+`/etc/udev/rules.d/`; without it libusb fails with `LIBUSB_ERROR_ACCESS`.
+
+## Zero-build fallback
+
+`host-ui/scripts/preview.sh [device-ip]` opens both streams without building anything:
+it prefers `ffplay` (with `-fflags nobuffer -flags low_delay`), falling back to
+`gst-launch-1.0 playbin`. Handy for closing M1 before the Qt app is built.
+
+## Testing without the device
+
+Not covered here. Once the device streams (DESIGN.md §6, M1 step 4), simply
+point the app (or `preview.sh`) at it. For local development without hardware,
+any RTSP server serving H.264/H.265 works, e.g. `mediamtx` fed by an ffmpeg
+test source, or GStreamer's `gst-rtsp-server` examples with `videotestsrc !
+x264enc`; then enter that server's `rtsp://host:port` in the URL bar (streams
+must be mounted at `/cam0` and `/cam1`).
+
+## Control panel (M2)
+
+A panel on the right of the video panes talks to the device's control channel:
+newline-delimited JSON over TCP, port **8555** (protocol reference:
+`PROTOCOL.md`). **Connect** opens it alongside the RTSP streams (same
+host as the video; the control port is always 8555). While connected, the panel
+polls `get-status` every 2 s (per-camera streaming state, frame counter, and —
+while frames flow — the `last_frame` sequence number) and offers per-camera
+exposure (µs, 0 = auto), gain (0 = auto), hardware trigger mode and a **Fire**
+button (`fire-trigger`, software single trigger — set trigger mode 4 first;
+`v4l2` source only). The **Sync trigger** checkbox (`set-sync`) switches every
+camera to external trigger mode for hardware-synchronized capture, and reverts
+itself if the device refuses. Request errors are shown inline in the Device
+status group — no dialogs. Exposure/gain are seeded once from the first
+`get-status` after connect.
+
+Each camera group also has an **ISP** sub-group (`set-isp` — `argus` source
+only, the device rejects it for `v4l2`/`test`): white-balance mode, saturation,
+temporal noise reduction and edge enhancement (mode + strength, -1 = auto), and
+AE exposure compensation. Values map 1:1 onto `nvarguscamerasrc` properties;
+current overrides are seeded from the `isp` object in the first `get-status`.
+
+A per-camera **Zoom** spin box (`set-zoom`, 1–8× GPU center crop + upscale)
+automatically reconnects that video pane on success — zoom applies to new RTSP
+sessions, so the pane restarts to show the new framing.
+
+A **Firmware Update** group handles OTA: "Select .swu file..." then
+"Upload & Install" streams the package to the device's update port
+(**8557**, PROTOCOL.md "OTA firmware update"); the progress bar tracks
+the swupdate installation via `get-update-status` polling. An
+auto-reboot checkbox reboots the device when the install succeeds, and a
+**Reboot device** button (the `reboot` method) does it on demand —
+needed to activate the new A/B slot.
+
+**Calibrate whites** (Device group; point cam0 at something white/gray first)
+measures the channel imbalance of the near-neutral bright region in cam0's
+decoded video and writes a corrected white trim via `set-tuning`. Applying
+restarts the device's Argus daemon and all streams (~5 s outage), so the UI
+waits, reconnects both panes, lets AE settle, re-measures, and iterates once
+more if needed; progress and the final R/G / B/G residuals appear in the
+Device status line. **Note**: `set-tuning` is not implemented on the
+device yet (PROTOCOL.md) — current devices answer unknown-method and the
+calibrator reports "device does not support set-tuning".
+
+## Face-detection overlay
+
+Boxes arrive on the secure session's metadata channel (usb) or as
+`{"event":"faces"}` control events (network) — same payload either way
+(TRANSPORT-ARCHITECTURE.md). `MainWindow::applyFaceMeta` normalises by
+the payload's `w`/`h` and `FrameView` draws them over the frame. No
+toggle: boxes show whenever the device sends them.
+
+## Open items
+
+- Per-pane stream stats and reconnect-on-stall handling.

@@ -4,6 +4,9 @@
 #include <QJsonObject>
 #include <QList>
 #include <QMainWindow>
+#include <memory>
+
+#include "secureusbbridge.h"
 #include <QStringList>
 #include <QUrl>
 
@@ -11,6 +14,7 @@ class ControlClient;
 class ControlPanel;
 class DiscoveryClient;
 class QComboBox;
+class QLabel;
 class QLineEdit;
 class QPushButton;
 class QMenu;
@@ -39,11 +43,20 @@ private:
     void setupToolbar(QWidget *parent);
     void setupVideoArea(QWidget *parent);
     void setupConnections();
+    void setConnectionState(const QString &text, bool online = false);
     void connectStreams();
     void disconnectStreams();
+    // Start/stop the device's cameras via set-stream. connect -> start,
+    // disconnect -> stop; symmetric so a reconnect always re-enables.
+    void setStreamEnabled(bool enabled);
+    // Parse a Channel::Meta face-box JSON payload and draw it on the camera's
+    // pane. Runs on the GUI thread (marshalled from the bridge worker).
+    void applyFaceMeta(int camera, const QByteArray &json);
     void restartPane(int index);
     QUrl streamUrl(int index) const;
     QString controlHost() const;
+    bool usesSecureUsb() const;
+    bool startSelectedTransport();
     void pollStatus();
     void pollUpdateStatus();
     void sendReboot();
@@ -58,7 +71,9 @@ private:
     QPushButton *m_connectButton = nullptr;
     QPushButton *m_discoverButton = nullptr;
     QMenu *m_discoverMenu = nullptr;
+    QComboBox *m_transportSelect = nullptr;
     QComboBox *m_cameraSelect = nullptr;
+    QLabel *m_connectionStatus = nullptr;
 
     // Video area.
     QStackedWidget *m_paneStack = nullptr;
@@ -80,6 +95,8 @@ private:
 
     // State.
     bool m_connected = false;
+    bool m_usingSecureUsb = false;
+    std::unique_ptr<SecureUsbBridge> m_secureUsbBridge;
     bool m_controlsPopulated = false;
     QList<int> m_cameraIndices;  // combo row -> actual camera index
     bool m_cameraListPopulated = false;

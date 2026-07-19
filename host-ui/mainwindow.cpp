@@ -1,14 +1,18 @@
 #include "mainwindow.h"
 
+#include <QThread>
 #include <QComboBox>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -32,13 +36,20 @@ constexpr quint16 kUpdatePort = proto::kUpdatePort;
 constexpr int kStatusPollMs = 2000;
 // Default device address on the USB CDC-NCM link (app default, not protocol).
 const QLatin1String kDefaultHost("192.168.55.1");
+const QLatin1String kSecureUsbHost("127.0.0.1");
+constexpr int kTransportAuto = 0;
+constexpr int kTransportSecureUsb = 1;
+constexpr int kTransportNetwork = 2;
 
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle(QStringLiteral("camera-viewer"));
+#ifndef CAMERA_VIEWER_VERSION
+#define CAMERA_VIEWER_VERSION "dev"
+#endif
+    setWindowTitle(QStringLiteral("camera-viewer " CAMERA_VIEWER_VERSION));
     setStyleSheet(Theme::stylesheet());
     Theme::applyFont(this);
     setAutoFillBackground(true);
@@ -53,13 +64,15 @@ MainWindow::MainWindow(QWidget *parent)
     setupVideoArea(central);
 
     setCentralWidget(central);
-    resize(1280, 620);
+    setMinimumSize(1024, 640);
+    resize(1440, 820);
 
     // Control channel + status poll.
     m_control = new ControlClient(this);
     m_statusTimer = new QTimer(this);
     m_statusTimer->setInterval(kStatusPollMs);
     connect(m_statusTimer, &QTimer::timeout, this, &MainWindow::pollStatus);
+
 
     // Calibration.
     m_calibrator = new WhiteBalanceCalibrator(m_control, this);
@@ -90,23 +103,87 @@ MainWindow::MainWindow(QWidget *parent)
 
 void MainWindow::setupToolbar(QWidget *parent)
 {
-    auto *topBar = new QHBoxLayout;
-    topBar->setSpacing(6);
-    topBar->setContentsMargins(8, 6, 8, 6);
+    auto *header = new QFrame(parent);
+    header->setObjectName(QStringLiteral("appHeader"));
+    auto *headerLayout = new QHBoxLayout(header);
+    headerLayout->setSpacing(12);
+    headerLayout->setContentsMargins(24, 14, 24, 14);
+
+    auto *mark = new QLabel(QStringLiteral("VC"), header);
+    mark->setObjectName(QStringLiteral("brandMark"));
+    mark->setAlignment(Qt::AlignCenter);
+
+    auto *brandBlock = new QWidget(header);
+    brandBlock->setObjectName(QStringLiteral("transparent"));
+    auto *brandLayout = new QVBoxLayout(brandBlock);
+    brandLayout->setContentsMargins(0, 0, 0, 0);
+    brandLayout->setSpacing(0);
+    auto *brand = new QLabel(QStringLiteral("Vision Console"), brandBlock);
+    brand->setObjectName(QStringLiteral("brandTitle"));
+    auto *version = new QLabel(QStringLiteral("CAMERA MANAGEMENT  •  " CAMERA_VIEWER_VERSION),
+                               brandBlock);
+    version->setObjectName(QStringLiteral("eyebrow"));
+    brandLayout->addWidget(brand);
+    brandLayout->addWidget(version);
+
+    m_connectionStatus = new QLabel(QStringLiteral("●  OFFLINE"), header);
+    m_connectionStatus->setObjectName(QStringLiteral("connectionPill"));
+    m_connectionStatus->setProperty("online", false);
+
+    headerLayout->addWidget(mark);
+    headerLayout->addWidget(brandBlock);
+    headerLayout->addStretch(1);
+    headerLayout->addWidget(m_connectionStatus);
+    parent->layout()->addWidget(header);
+
+    auto *connectionBar = new QFrame(parent);
+    connectionBar->setObjectName(QStringLiteral("connectionBar"));
+    auto *topBar = new QHBoxLayout(connectionBar);
+    topBar->setSpacing(10);
+    topBar->setContentsMargins(24, 12, 24, 12);
+
+    auto addField = [connectionBar, topBar](const QString &title,
+                                            QWidget *field, int stretch = 0) {
+        auto *block = new QWidget(connectionBar);
+        block->setObjectName(QStringLiteral("fieldBlock"));
+        auto *layout = new QVBoxLayout(block);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(5);
+        auto *label = new QLabel(title, block);
+        label->setObjectName(QStringLiteral("fieldLabel"));
+        layout->addWidget(label);
+        layout->addWidget(field);
+        topBar->addWidget(block, stretch);
+    };
 
     m_hostEdit = new QLineEdit(kDefaultHost, parent);
     m_hostEdit->setPlaceholderText(QStringLiteral("Device IP / rtsp://host:port"));
     m_hostEdit->setToolTip(
         QStringLiteral("Device IP/hostname, or an rtsp://host:port base URL"));
+    m_hostEdit->setMinimumWidth(260);
+
+    m_transportSelect = new QComboBox(parent);
+    m_transportSelect->addItem(QStringLiteral("Auto"));
+    m_transportSelect->addItem(QStringLiteral("Secure USB"));
+    m_transportSelect->addItem(QStringLiteral("Network"));
+    m_transportSelect->setCurrentIndex(kTransportAuto);
+    m_transportSelect->setToolTip(
+        QStringLiteral("Secure USB uses the authenticated local transport; "
+                       "Network uses CDC-NCM/ethernet directly; Auto prefers USB"));
+    m_hostEdit->setEnabled(true);
+
 
     m_cameraSelect = new QComboBox(parent);
     m_cameraSelect->setToolTip(
         QStringLiteral("switch the video pane between cameras"));
     // Populated dynamically from get-status / discovery (see populateCameraList)
+    m_cameraSelect->addItem(QStringLiteral("Camera 1"));
+    m_cameraIndices.append(0);
 
     m_connectButton = new QPushButton(QStringLiteral("Connect"), parent);
     m_connectButton->setObjectName(QStringLiteral("accent"));
     m_connectButton->setCursor(Qt::PointingHandCursor);
+    m_connectButton->setMinimumWidth(112);
 
     m_discoverButton = new QPushButton(QStringLiteral("Discover"), parent);
     m_discoverButton->setCursor(Qt::PointingHandCursor);
@@ -114,17 +191,49 @@ void MainWindow::setupToolbar(QWidget *parent)
         QStringLiteral("find devices via UDP broadcast (port %1)").arg(proto::kDiscoveryPort));
     m_discoverMenu = new QMenu(m_discoverButton);
 
-    topBar->addWidget(m_hostEdit, 1);
-    topBar->addWidget(m_cameraSelect);
-    topBar->addWidget(m_connectButton);
-    topBar->addWidget(m_discoverButton);
+    addField(QStringLiteral("DEVICE ADDRESS"), m_hostEdit, 1);
+    addField(QStringLiteral("TRANSPORT"), m_transportSelect);
+    addField(QStringLiteral("ACTIVE CAMERA"), m_cameraSelect);
 
-    parent->layout()->addItem(topBar);
+    auto *actions = new QWidget(connectionBar);
+    actions->setObjectName(QStringLiteral("fieldBlock"));
+    auto *actionsLayout = new QHBoxLayout(actions);
+    actionsLayout->setContentsMargins(0, 20, 0, 0);
+    actionsLayout->setSpacing(8);
+    actionsLayout->addWidget(m_discoverButton);
+    actionsLayout->addWidget(m_connectButton);
+    topBar->addWidget(actions);
+    parent->layout()->addWidget(connectionBar);
 }
 
 void MainWindow::setupVideoArea(QWidget *parent)
 {
+    auto *workspace = new QWidget(parent);
+    workspace->setObjectName(QStringLiteral("workspace"));
+    auto *workspaceLayout = new QVBoxLayout(workspace);
+    workspaceLayout->setContentsMargins(24, 18, 24, 24);
+    workspaceLayout->setSpacing(12);
+
+    auto *titleRow = new QHBoxLayout;
+    titleRow->setContentsMargins(0, 0, 0, 0);
+    auto *titleBlock = new QWidget(workspace);
+    titleBlock->setObjectName(QStringLiteral("transparent"));
+    auto *titleLayout = new QVBoxLayout(titleBlock);
+    titleLayout->setContentsMargins(0, 0, 0, 0);
+    titleLayout->setSpacing(2);
+    auto *title = new QLabel(QStringLiteral("Live view"), titleBlock);
+    title->setObjectName(QStringLiteral("pageTitle"));
+    auto *subtitle = new QLabel(
+        QStringLiteral("Monitor the selected camera and tune device parameters"), titleBlock);
+    subtitle->setObjectName(QStringLiteral("subtitle"));
+    titleLayout->addWidget(title);
+    titleLayout->addWidget(subtitle);
+    titleRow->addWidget(titleBlock);
+    titleRow->addStretch(1);
+    workspaceLayout->addLayout(titleRow);
+
     m_paneStack = new QStackedWidget(parent);
+    m_paneStack->setObjectName(QStringLiteral("videoCard"));
     for (int i = 0; i < 2; ++i) {
         m_panes[i] = new VideoPane(QStringLiteral("cam%1").arg(i), parent);
         m_paneStack->addWidget(m_panes[i]);
@@ -134,21 +243,55 @@ void MainWindow::setupVideoArea(QWidget *parent)
     m_controlPanel = new ControlPanel(parent);
 
     auto *paneLayout = new QHBoxLayout;
-    paneLayout->setSpacing(0);
+    paneLayout->setSpacing(16);
     paneLayout->setContentsMargins(0, 0, 0, 0);
     paneLayout->addWidget(m_paneStack, 1);
     paneLayout->addWidget(m_controlPanel);
+    workspaceLayout->addLayout(paneLayout, 1);
+    auto *rootLayout = qobject_cast<QVBoxLayout *>(parent->layout());
+    Q_ASSERT(rootLayout);
+    rootLayout->addWidget(workspace, 1);
+}
 
-    parent->layout()->addItem(paneLayout);
+void MainWindow::setConnectionState(const QString &text, bool online)
+{
+    m_connectionStatus->setText(QStringLiteral("●  ") + text.toUpper());
+    m_connectionStatus->setProperty("online", online);
+    m_connectionStatus->style()->unpolish(m_connectionStatus);
+    m_connectionStatus->style()->polish(m_connectionStatus);
 }
 
 void MainWindow::setupConnections()
 {
+    connect(m_transportSelect, &QComboBox::currentIndexChanged, this,
+            [this](int) {
+                if (m_connected)
+                    disconnectStreams();
+                const bool required =
+                    m_transportSelect->currentIndex() == kTransportSecureUsb;
+                m_hostEdit->setEnabled(!required);
+                m_discoverButton->setEnabled(!required);
+                if (required)
+                    m_hostEdit->setPlaceholderText(
+                        QStringLiteral("Secure USB (local authenticated transport)"));
+                else
+                    m_hostEdit->setPlaceholderText(
+                        QStringLiteral("Device IP / rtsp://host:port"));
+            });
+
     // Camera selector — switch the visible pane.
     connect(m_cameraSelect, &QComboBox::activated, this, [this](int row) {
         const int camIndex = comboBoxToCameraIndex(row);
-        if (camIndex >= 0 && camIndex < 2)
+        if (camIndex >= 0 && camIndex < 2) {
             m_paneStack->setCurrentIndex(camIndex);
+            // The viewer presents one camera at a time.  Opening every
+            // mount on connect made a broken /cam1 RTSP session contend with
+            // the selected healthy stream in Qt's media backend.  Defer a
+            // stream until the user selects its pane so a failed camera is
+            // isolated from the other one.
+            if (m_connected)
+                restartPane(camIndex);
+        }
     });
 
     // Connect / Disconnect toggle.
@@ -166,16 +309,21 @@ void MainWindow::setupConnections()
 
     // Control channel lifecycle.
     connect(m_control, &ControlClient::connected, this, [this]() {
+        setConnectionState(QStringLiteral("Online"), true);
         m_controlPanel->setControlStatus(QStringLiteral("control: connected"));
         m_controlPanel->clearError();
         m_controlsPopulated = false;
         m_calibrationResult.clear();
         m_controlPanel->setControlsEnabled(true);
+        // connect -> start the device's cameras (symmetric with the
+        // disconnect -> stop). Idempotent: a fresh device is already enabled.
+        setStreamEnabled(true);
         m_statusTimer->start();
         pollStatus();
     });
 
     connect(m_control, &ControlClient::disconnected, this, [this]() {
+        setConnectionState(QStringLiteral("Offline"));
         m_calibrator->abort();
         m_controlPanel->setControlStatus(QStringLiteral("control: disconnected"));
         m_controlPanel->setDeviceStatus(QString());
@@ -184,6 +332,8 @@ void MainWindow::setupConnections()
         // Reset camera list so it re-populates on next connect
         m_cameraSelect->clear();
         m_cameraIndices.clear();
+        m_cameraSelect->addItem(QStringLiteral("Camera 1"));
+        m_cameraIndices.append(0);
         m_cameraListPopulated = false;
         m_controlsPopulated = false;
     });
@@ -395,6 +545,17 @@ void MainWindow::setupConnections()
                     });
             });
 
+    // Detection boxes in network mode arrive as control events rather than on
+    // the secure USB Meta channel. Same payload either way, so both feed
+    // applyFaceMeta and the identical FrameView overlay.
+    connect(m_control, &ControlClient::eventReceived, this,
+            [this](const QString &event, int camera, const QJsonObject &data) {
+                if (event != QLatin1String("faces") || camera < 0)
+                    return;
+                applyFaceMeta(camera,
+                              QJsonDocument(data).toJson(QJsonDocument::Compact));
+            });
+
     // OTA update: upload .swu file to device.
     connect(m_controlPanel, &ControlPanel::uploadRequested, this,
             [this](const QString &filePath) {
@@ -412,32 +573,92 @@ void MainWindow::setupConnections()
 
 void MainWindow::connectStreams()
 {
-    for (int i = 0; i < 2; ++i)
-        restartPane(i);
+    if (!startSelectedTransport())
+        return;
+    setConnectionState(QStringLiteral("Connecting"));
+    // This is a single-pane UI: only open the camera that is visible.  In
+    // particular, an unavailable second camera must not interfere with the
+    // selected camera's decoder/session.  Selecting the other camera opens
+    // it on demand (see setupConnections()).
+    restartPane(m_paneStack->currentIndex());
     m_control->connectToDevice(controlHost(), kControlPort);
     m_connected = true;
     m_connectButton->setText(QStringLiteral("Disconnect"));
     updateCalibrateEnabled();
 }
 
+void MainWindow::applyFaceMeta(int camera, const QByteArray &json)
+{
+    if (camera < 0 || camera >= 2)
+        return;
+    const QJsonObject obj = QJsonDocument::fromJson(json).object();
+    const double w = obj.value(QStringLiteral("w")).toDouble();
+    const double h = obj.value(QStringLiteral("h")).toDouble();
+    QVector<QRectF> boxes;
+    if (w > 0 && h > 0) {
+        // Normalise pixel boxes by the detector frame size, so the pane can
+        // scale to whatever it is currently displayed at.
+        for (const QJsonValue &f : obj.value(QStringLiteral("faces")).toArray()) {
+            const QJsonObject b = f.toObject();
+            boxes.append(QRectF(b.value(QStringLiteral("x")).toDouble() / w,
+                                b.value(QStringLiteral("y")).toDouble() / h,
+                                b.value(QStringLiteral("w")).toDouble() / w,
+                                b.value(QStringLiteral("h")).toDouble() / h));
+        }
+    }
+    m_panes[camera]->setFaces(boxes);
+}
+
+void MainWindow::setStreamEnabled(bool enabled)
+{
+    if (!m_control->isConnected())
+        return;
+    for (int i = 0; i < 2; ++i)
+        m_control->sendRequest(
+            QLatin1String(proto::methods::kSetStream),
+            QJsonObject{{QStringLiteral("camera"), i},
+                        {QStringLiteral("enabled"), enabled}},
+            [](const QJsonObject &, const QJsonObject &) {});
+    m_control->flush();
+}
+
 void MainWindow::disconnectStreams()
 {
+    // disconnect -> stop the device's cameras explicitly. Symmetric with the
+    // connect -> start in the control-connected handler, so the persisted
+    // enabled=false is always undone on the next connect (no dark reconnect).
+    // The host-silence watchdog remains a backstop for ungraceful drops.
+    setStreamEnabled(false);
+    // Over secure USB the stop still has to cross the tunnel (control socket
+    // -> bridge -> USB -> device); give the bridge worker a brief window to
+    // pump it before the bridge is torn down.
+    if (m_usingSecureUsb && m_control->isConnected())
+        QThread::msleep(150);
+
     for (VideoPane *pane : m_panes)
         pane->stop();
     m_control->disconnectFromDevice();
+    m_secureUsbBridge.reset();
+    m_usingSecureUsb = false;
     m_connected = false;
     m_connectButton->setText(QStringLiteral("Connect"));
+    setConnectionState(QStringLiteral("Offline"));
     updateCalibrateEnabled();
 }
 
 void MainWindow::restartPane(int index)
 {
+    if (usesSecureUsb()) {
+        m_panes[index]->startExternal();
+        return;
+    }
     m_panes[index]->restart(streamUrl(index));
 }
 
 QUrl MainWindow::streamUrl(int index) const
 {
-    QString text = m_hostEdit->text().trimmed();
+    QString text = usesSecureUsb() ? QString(kSecureUsbHost)
+                                   : m_hostEdit->text().trimmed();
     if (text.isEmpty())
         text = kDefaultHost;
 
@@ -452,6 +673,8 @@ QUrl MainWindow::streamUrl(int index) const
 
 QString MainWindow::controlHost() const
 {
+    if (usesSecureUsb())
+        return QString(kSecureUsbHost);
     QString text = m_hostEdit->text().trimmed();
     if (text.isEmpty())
         text = kDefaultHost;
@@ -459,6 +682,50 @@ QString MainWindow::controlHost() const
         return QUrl(text).host();
     return text;
 }
+
+bool MainWindow::usesSecureUsb() const
+{
+    return m_usingSecureUsb;
+}
+
+bool MainWindow::startSelectedTransport()
+{
+    m_secureUsbBridge.reset();
+    m_usingSecureUsb = false;
+    if (m_transportSelect->currentIndex() == kTransportNetwork)
+        return true;
+
+    QString error;
+    m_secureUsbBridge = SecureUsbBridge::start(&error);
+    if (m_secureUsbBridge) {
+        m_usingSecureUsb = true;
+        // Decoded frames go straight into each pane's sink -- no local RTSP
+        // hop, no player "connecting" state.
+        for (int i = 0; i < 2; ++i)
+            m_secureUsbBridge->setVideoSink(i, m_panes[i]->videoSink());
+        // Face-detection boxes arrive on the metadata channel from a bridge
+        // worker thread; marshal to the GUI thread, then draw on the pane.
+        m_secureUsbBridge->setMetaHandler([this](int camera, std::string json) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, camera, bytes = QByteArray::fromStdString(json)] {
+                    applyFaceMeta(camera, bytes);
+                },
+                Qt::QueuedConnection);
+        });
+        return true;
+    }
+
+    const bool absent = error.startsWith(QStringLiteral("no secure USB camera found"));
+    if (m_transportSelect->currentIndex() == kTransportAuto && absent)
+        return true;
+
+    // A camera that enumerated but failed authentication/configuration must
+    // never silently downgrade to the network transport.
+    m_controlPanel->setError(QStringLiteral("secure USB: %1").arg(error));
+    return false;
+}
+
 
 void MainWindow::pollStatus()
 {

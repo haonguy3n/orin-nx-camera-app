@@ -4,8 +4,8 @@
 
 #include <cstring>
 
-#include "camera/folly/ScopeGuard.h"
-#include "camera/folly/logging/xlog.h"
+#include "camera/base/ScopeGuard.h"
+#include "camera/base/logging/xlog.h"
 #include "proto/Protocol.h"
 
 namespace camera {
@@ -111,6 +111,10 @@ Config FileConfigLoader::load() {
     cfg.listen = get_string(kf, "server", "listen", cfg.listen);
     if (cfg.listen.empty())
         cfg.listen = "all";
+    cfg.transports = get_choice(kf, "server", "transports", cfg.transports,
+                                {"network", "usb"});
+    cfg.recovery_update =
+        get_bool(kf, "server", "recovery-update", cfg.recovery_update);
     cfg.control_port = get_int(kf, "server", "control-port", cfg.control_port);
     if (cfg.control_port < 0 || cfg.control_port > 65535) {
         XLOGF(WARN, "config: [server] control-port %d out of range (using %d)",
@@ -129,6 +133,11 @@ Config FileConfigLoader::load() {
     cfg.tls_cert = get_string(kf, "server", "tls-cert", cfg.tls_cert);
     cfg.tls_key = get_string(kf, "server", "tls-key", cfg.tls_key);
     cfg.tls_ca = get_string(kf, "server", "tls-ca", cfg.tls_ca);
+
+    cfg.detect_model = get_string(kf, "detect", "model", cfg.detect_model);
+    cfg.detect_width = get_int(kf, "detect", "width", cfg.detect_width);
+    cfg.detect_score = get_double(kf, "detect", "score", cfg.detect_score);
+    cfg.detect_fps = get_int(kf, "detect", "fps", cfg.detect_fps);
 
     cfg.update_port = get_int(kf, "server", "update-port", cfg.update_port);
     if (cfg.update_port < 0 || cfg.update_port > 65535) {
@@ -175,6 +184,21 @@ Config FileConfigLoader::load() {
                 cam.isp[*k + strlen("isp-")] = value;
         }
         g_strfreev(keys);
+    }
+
+    // One transport serves video at a time (user decision 2026-07-19). The
+    // old "both" ran RTSP and secure USB together, which Argus cannot honour
+    // -- only one consumer may open a sensor -- so the USB side had to pull
+    // frames back off the local RTSP mount through loopback. That fallback
+    // cost an RTP round trip AND silently dropped face detection, because the
+    // re-serve string has no detect branch. Rejecting the mode removes the
+    // failure instead of documenting it.
+    if (cfg.transports != "usb" && cfg.transports != "network") {
+        XLOGF(WARN,
+              "config: transports='%s' is not supported (one transport serves "
+              "video at a time); using 'usb'. Set transports=network for RTSP.",
+              cfg.transports.c_str());
+        cfg.transports = "usb";
     }
 
     XLOGF(INFO, "config: loaded %s", path_.c_str());

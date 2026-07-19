@@ -143,12 +143,12 @@ NOT verified:
 - **Compile check outstanding**: run `bitbake virtual/kernel` first; the
   driver builds into the kernel image (`CONFIG_NV_VIDEO_VC_MIPI=y`, see
   `vc-mipi.cfg` for why it cannot be `=m`).
-- **Mono vs color IMX296 still unconfirmed** (DESIGN.md §7): the dtsi uses
-  VC's defaults `mode_type "bayer"` / `pixel_phase "rggb"` and zeroed
-  `active_w/h`, which is fine for the V4L2 path; for the Argus/ISP path
-  (color IMX296C) the GStreamer-marked fields in the dtsi (active_l/t/w/h,
-  pixel_phase, physical_w/h) must be tuned per VC's "GStreamer support"
-  README section.
+- **Mono vs color IMX296 — resolved** (docs/DESIGN.md §7): cam0 is the
+  color IMX296C, cam1 the mono IMX296 (currently unplugged/disabled). The
+  dtsi still uses VC's defaults `mode_type "bayer"` / `pixel_phase "rggb"`
+  for both, which is why the mono sensor only exposes RG10 and pure-V4L2
+  grey capture needs a DT mode change (gray/Y10) — the M3 sync-capture
+  prerequisite.
 - Patch 0015 **disables the stock IMX219/IMX477 devkit camera DT** — Rasp-Pi
   cams on the devkit stop working (expected for this product).
 - The patches apply to the shared `linux-tegra` sources for **every** tegra

@@ -1,8 +1,8 @@
 SUMMARY = "ConfigFS USB composite gadget (CDC-NCM + ACM) for the camera device"
 DESCRIPTION = "Systemd oneshot that builds a composite USB gadget in \
 /sys/kernel/config/usb_gadget/: a CDC-NCM network function (usb0, static \
-192.168.55.1/24 on the device, DHCP for the host via dnsmasq) and an ACM \
-serial function with a getty on /dev/ttyGS0."
+192.168.55.1/24 on the device, DHCP for the host via dnsmasq), an ACM \
+serial function, and a FunctionFS secure vendor-bulk function."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
