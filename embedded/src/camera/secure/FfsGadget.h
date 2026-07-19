@@ -22,6 +22,14 @@ class FfsGadget {
 public:
     [[nodiscard]] static base::Expected<std::unique_ptr<FfsGadget>, std::string>
     create();
+
+    // Call when this process will NOT own FunctionFS (transports=network, or
+    // secure USB failed to start). Removes a stale ffs.secure left by an
+    // earlier run in this boot and rebinds the UDC, so the NCM/ACM gadget --
+    // and with it the 192.168.55.x link the host reaches the device on --
+    // comes back. A no-op when nothing of ours is in the config, so it never
+    // disturbs a healthy gadget.
+    static void release_base_gadget();
     ~FfsGadget();
 
     FfsGadget(const FfsGadget&) = delete;

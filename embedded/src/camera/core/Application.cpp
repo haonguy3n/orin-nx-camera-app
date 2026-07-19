@@ -21,6 +21,7 @@
 #include "camera/lib/v4l2/V4l2Factory.h"
 #ifdef ENABLE_SECURE_USB
 #include "camera/core/UsbAwareStreamController.h"
+#include "camera/secure/FfsGadget.h"
 #endif
 
 #include "camera/base/logging/xlog.h"
@@ -261,6 +262,11 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
 #ifdef ENABLE_SECURE_USB
     if (config_.transports == "network") {
         XLOGF(INFO, "transports=network: secure USB endpoint not published");
+        // Hand the gadget back so NCM/ACM can bind. Without this a switch from
+        // usb to network left ffs.secure in the config with no descriptors,
+        // configfs refused to bind, and USB networking never came up -- the
+        // device served RTSP onto a link the host could not reach.
+        secure::FfsGadget::release_base_gadget();
     } else {
         // Secure USB is additive. Failure to expose the optional FunctionFS
         // interface must never take down the established NCM RTSP path.
@@ -336,6 +342,11 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
         if (!secure_usb_->start(&secure_error)) {
             XLOGF(WARN, "secure-usb disabled: %s", secure_error.c_str());
             secure_usb_.reset();
+            // Same reason as the network-mode path: if we are not going to own
+            // FunctionFS, give the gadget back so NCM/ACM binds and the device
+            // stays reachable -- including over the recovery channel, which is
+            // exactly what is needed when secure USB has just failed.
+            secure::FfsGadget::release_base_gadget();
         }
     }
 #endif

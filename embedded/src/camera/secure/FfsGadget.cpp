@@ -144,6 +144,39 @@ bool prepare_functionfs(std::string* error) {
 
 }  // namespace
 
+void FfsGadget::release_base_gadget() {
+    // Restores the NCM/ACM gadget when this process is NOT going to own the
+    // FunctionFS function -- transports=network, or secure USB failing to
+    // start.
+    //
+    // Why this is needed: usb-gadget.service binds a gadget carrying only NCM
+    // and ACM. FunctionFS cannot be added to a bound gadget, so create() above
+    // unbinds the UDC, adds ffs.secure, and rebinds. A previous run in this
+    // boot therefore leaves configs/c.1/ffs.secure behind, and configfs will
+    // NOT bind a config whose FunctionFS function has no descriptors written.
+    //
+    // The result was that switching to transports=network killed USB entirely:
+    // the gadget never enumerated, so CDC-NCM never appeared, so the RTSP
+    // server came up correctly on a network the host could not reach. The
+    // device looked healthy in its own log and was simply unreachable.
+    const std::string link = std::string(kGadget) + "/configs/c.1/ffs.secure";
+    const std::string function = std::string(kGadget) + "/functions/ffs.secure";
+    if (access(link.c_str(), F_OK) != 0 && access(function.c_str(), F_OK) != 0) {
+        // Nothing of ours in the config. Do not touch the UDC: unbinding a
+        // working gadget to "fix" it would drop the host's network.
+        return;
+    }
+    XLOGF(INFO, "usb: releasing FunctionFS so the NCM/ACM gadget can bind");
+    const std::string udc_path = std::string(kGadget) + "/UDC";
+    const std::string udc = first_udc();
+    write_file(udc_path, "\n");            // unbind to edit the config
+    umount(kFfs);                           // may hold the ffs instance
+    unlink(link.c_str());
+    rmdir(function.c_str());
+    if (!udc.empty() && !write_file(udc_path, udc))
+        XLOGF(WARN, "usb: could not rebind the gadget; USB networking is down");
+}
+
 base::Expected<std::unique_ptr<FfsGadget>, std::string> FfsGadget::create() {
     const std::string base_udc = first_udc();
     auto restore = [&] {
