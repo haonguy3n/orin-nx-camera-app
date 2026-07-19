@@ -28,7 +28,7 @@ constexpr int kStallChecks = 3;
 class MountController {
 public:
     // Runs face detection on this mount's "detect" appsink, when the launch
-    // string carries one (see PipelineBuilder::nvenc_tail_with_detect).
+    // string carries one (see PipelineBuilder::rtsp_launch).
     // Detection is per-media: gst-rtsp-server builds the pipeline on client
     // connect, so this starts when a client arrives and stops when the media
     // goes away -- the same "no session, no detection" property the USB path

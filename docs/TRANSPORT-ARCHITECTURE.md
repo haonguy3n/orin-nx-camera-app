@@ -16,7 +16,7 @@ deliberately not supported. See "Rejected" below.
 ```
                      |          Camera streamer
   IMX296 --> ARGUS --|
-                     |     CameraPipeline (one per sensor)
+                     |      camera media pipeline
                      |          |                 |
                      |      detection         video stream
                      |      YuNet/CUDA        H.265 encode
@@ -51,9 +51,10 @@ asymmetry is the accepted trade-off recorded below, not an unfinished edge.
 
 | Role | Class | File |
 |---|---|---|
-| Capture, one per sensor | `media::CameraPipeline` | `media/CameraPipeline.{h,cpp}` |
-| Delivery strategy (video) | `media::IFrameTransport` | `media/CameraPipeline.h` |
-| Launch strings (network mode + source fragments) | `PipelineBuilder` | `pipeline/PipelineBuilder.{h,cpp}` |
+| Source fragments (both modes) | `ICameraSource` | `pipeline/*Source.{h,cpp}` |
+| RTSP graph composition | `PipelineBuilder::rtsp_launch` | `pipeline/PipelineBuilder.{h,cpp}` |
+| Typed USB capture/encode | `media::CameraPipeline` | `media/CameraPipeline.{h,cpp}` |
+| USB delivery strategy (video) | `media::IFrameTransport` | `media/CameraPipeline.h` |
 | Typed usb pipeline (tee/encode/detect) | `media::PipelineSpec`, `Element/Bin/Tee` | `media/` |
 | Detector (YuNet/CUDA) | `detect::IFaceDetector` | `detect/FaceDetector.{h,cpp}` |
 | Box payload | `detect::to_meta_json` | `detect/FaceDetector.cpp` |
@@ -63,11 +64,41 @@ asymmetry is the accepted trade-off recorded below, not an unfinished edge.
 
 | Role | Class | File |
 |---|---|---|
-| Transport, session, crypto | `SecureUsbServer` | `secure/SecureUsbServer.cpp` |
+| Reusable secure context/session | `SecureUsbContext`, `SecureUsbSession` | `common/secure/SecureUsbContext.{h,cpp}` |
+| FunctionFS/application adapter | `SecureUsbServer` | `secure/SecureUsbServer.cpp` |
 | Video -> `Channel::Video` | `VideoSink` | same file |
 | Raw -> detector | `DetectSink` | same file |
 | Boxes -> `Channel::Meta` | `SessionMetaSink` | same file |
 | Gadget lifecycle | `FfsGadget` | `secure/FfsGadget.{h,cpp}` |
+
+The reusable device-side API follows the same shape as a TLS server context.
+I/O callbacks return the number of bytes transferred (zero means EOF) or an
+error; they may wrap FunctionFS, a socket, or any other blocking byte stream:
+
+```cpp
+auto context = SecureUsbContext::create({
+    .certificate = cert,
+    .private_key = key,
+});
+if (!context)
+    return context.error();
+
+auto session = context->accept({
+    .read = read_usb,
+    .write = write_usb,
+});
+if (!session)
+    return session.error();
+
+session->send(Channel::Control, 0, reply);
+auto request = session->receive();
+```
+
+`create()` parses the certificate and key, checks that they match, and caches
+the identity. `accept()` performs the handshake and preserves bytes read past
+the ClientHello for the first encrypted record. `send()` serializes concurrent
+writers so the implicit AEAD record counter stays in wire order. None of these
+types depends on GLib, GStreamer, libusb, or FunctionFS.
 
 **network mode**
 

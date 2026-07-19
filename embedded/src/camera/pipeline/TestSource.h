@@ -13,7 +13,7 @@ namespace camera {
 class TestSource : public ICameraSource {
 public:
     std::string source_type() const override { return "test"; }
-    std::string build_launch(const CameraConfig& cam) const override;
+    bool uses_hardware_encoder() const override { return false; }
     std::string build_source_fragment(const CameraConfig& cam) const override;
     void apply_initial_settings(const CameraConfig& cam) const override;
 

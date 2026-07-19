@@ -36,7 +36,6 @@
 #include "camera/secure/FfsGadget.h"
 #include "secure/SecureHandshake.h"
 #include "secure/SecureWire.h"
-#include "camera/secure/SecureRecord.h"
 
 namespace camera::secure {
 namespace {
@@ -107,43 +106,41 @@ bool endpoint_write_all(int fd, const uint8_t* bytes, size_t length,
 // gst-launch-1.0 fails as _exit(127), indistinguishable from a pipeline that
 // runs and produces nothing, and building argv after fork() in a
 // multi-threaded process can deadlock on the malloc lock. The pipeline itself
-// now lives in media::CameraPipeline, shared with every other transport.
+// now lives in media::CameraPipeline and is reusable by direct-frame
+// transports.
 
 // The single thread that writes to the endpoint. Several producers -- two
 // video pipelines and the control/update tunnel -- enqueue records; this
-// drains them in seal order. Isolated from Session so the queue machinery is
+// drains them in queue order. Isolated from Session so the queue machinery is
 // not tangled with the session's local-socket and watchdog state.
 class RecordWriter {
 public:
-    RecordWriter(int endpoint, const SecureRecord::Key& key,
-                 const SecureRecord::Iv& iv, std::atomic<bool>& dead)
-        : endpoint_(endpoint), encrypt_(key, iv), dead_(dead) {}
+    RecordWriter(SecureUsbSession& secure, std::atomic<bool>& dead)
+        : secure_(secure), dead_(dead) {}
 
-    // Seal `size` bytes and queue them. The ordering lock spans seal+queue so
-    // wire order matches seal order: the record nonce is an implicit counter,
-    // and reordering (or dropping *after* sealing) desynchronises the peer.
+    // Queue plaintext in one mutex-defined order. The writer thread later
+    // calls SecureUsbSession::send() in exactly that order, so the session's
+    // implicit nonce counter and wire order cannot diverge.
     //
     // `droppable` video is discarded once the queue passes kQueueLimit rather
     // than blocking the producer -- a synchronous stall here would back up
     // through the encoder until the frame watchdog killed the camera. Control
-    // and update are never droppable; they are not replaceable. Returns false
-    // only if sealing fails.
+    // and update are never droppable; they are not replaceable.
     bool enqueue(Channel channel, uint8_t stream, const uint8_t* data,
                  size_t size, bool droppable) {
-        std::lock_guard<std::mutex> ordering(ordering_);
-        {
-            std::lock_guard<std::mutex> lock(queue_mutex_);
-            if (droppable && queued_bytes_ >= kQueueLimit) {
-                dropped_bytes_ += size;
-                return true;
-            }
-        }
-        auto wire = make_wire_record(channel, stream,
-                                     std::vector<uint8_t>(data, data + size), encrypt_);
-        if (!wire.hasValue()) return false;
+        if (dead_ || size > kMaxPayload - 2 ||
+            (size != 0 && data == nullptr))
+            return false;
         std::lock_guard<std::mutex> lock(queue_mutex_);
-        queued_bytes_ += wire.value().size();
-        queue_.push_back(std::move(wire.value()));
+        if (droppable && queued_bytes_ >= kQueueLimit) {
+            dropped_bytes_ += size;
+            return true;
+        }
+        Outbound record{channel, stream, {}};
+        if (size != 0)
+            record.payload.assign(data, data + size);
+        queued_bytes_ += wire_size(record);
+        queue_.push_back(std::move(record));
         queue_signal_.notify_one();
         return true;
     }
@@ -157,7 +154,7 @@ public:
         size_t written = 0, reported = 0;
         while (!dead_) {
             if (should_end()) { dead_ = true; break; }
-            std::vector<uint8_t> record;
+            Outbound record;
             {
                 std::unique_lock<std::mutex> lock(queue_mutex_);
                 queue_signal_.wait_for(lock, std::chrono::milliseconds(100),
@@ -165,16 +162,21 @@ public:
                 if (queue_.empty()) continue;
                 record = std::move(queue_.front());
                 queue_.pop_front();
-                queued_bytes_ -= record.size();
+                queued_bytes_ -= wire_size(record);
             }
-            if (!endpoint_write_all(endpoint_, record.data(), record.size(), dead_)) {
+            if (auto sent = secure_.send(record.channel, record.stream,
+                                         record.payload);
+                !sent) {
+                if (!dead_)
+                    XLOGF(WARN, "secure-usb: encrypted write failed: %s",
+                          sent.error().c_str());
                 dead_ = true;
                 break;
             }
             if (written == 0)
                 XLOGF(INFO, "secure-usb: first record (%zu bytes) on the endpoint",
-                      record.size());
-            written += record.size();
+                      wire_size(record));
+            written += wire_size(record);
             // "sent" in video_loop counts enqueues; this counts bytes the host
             // actually drained. Diverging numbers mean a stalled host.
             if (written - reported >= 8 * 1024 * 1024) {
@@ -195,14 +197,23 @@ public:
     size_t dropped_bytes() const { return dropped_bytes_; }
 
 private:
+    struct Outbound {
+        Channel channel = Channel::Control;
+        uint8_t stream = 0;
+        std::vector<uint8_t> payload;
+    };
+
+    // Four-byte length + channel/stream header + Poly1305 tag.
+    static size_t wire_size(const Outbound& record) {
+        return record.payload.size() + 4 + 2 + 16;
+    }
+
     static constexpr size_t kQueueLimit = 4 * 1024 * 1024;
-    int endpoint_;
-    SecureRecord encrypt_;  // guarded by ordering_
+    SecureUsbSession& secure_;
     std::atomic<bool>& dead_;
-    std::mutex ordering_;
     std::mutex queue_mutex_;
     std::condition_variable queue_signal_;
-    std::deque<std::vector<uint8_t>> queue_;
+    std::deque<Outbound> queue_;
     size_t queued_bytes_ = 0;
     size_t dropped_bytes_ = 0;
     pthread_t thread_{};
@@ -352,16 +363,24 @@ private:
 // One authenticated session: a thin coordinator over the outbound writer, the
 // local control/update tunnel, and the host-silence watchdog.
 struct Session {
-    Session(int endpoint, const SecureRecord::Key& key, const SecureRecord::Iv& iv,
+    // Shared with the FunctionFS transport callbacks created before Session,
+    // so shutdown can abort a blocked endpoint write.
+    std::shared_ptr<std::atomic<bool>> dead_state_;
+    SecureUsbSession secure_;
+    std::atomic<bool>& dead;
+
+    Session(std::shared_ptr<std::atomic<bool>> dead_state,
+            SecureUsbSession secure,
             LocalTunnel::Dispatch dispatch, LocalTunnel::OpenUpdate open_update)
-        : writer_(endpoint, key, iv, dead),
+        : dead_state_(std::move(dead_state)),
+          secure_(std::move(secure)),
+          dead(*dead_state_),
+          writer_(secure_, dead),
           tunnel_(dead,
                   [this](Channel c, const uint8_t* d, size_t n) {
                       return writer_.enqueue(c, 0, d, n, /*droppable=*/false);
                   },
                   std::move(dispatch), std::move(open_update)) {}
-
-    std::atomic<bool> dead{false};
 
     // Last time anything arrived from the host. The UI polls status every few
     // seconds over the tunnel, so a live viewer keeps this fresh; a host that
@@ -381,6 +400,10 @@ struct Session {
     }
     size_t dropped_bytes() const { return writer_.dropped_bytes(); }
     bool deliver_local(const WireMessage& message) { return tunnel_.deliver(message); }
+    base::Expected<WireMessage, std::string> open_record(
+        const std::vector<uint8_t>& wire) {
+        return secure_.open_record(wire);
+    }
     void pump_tunnel() { tunnel_.pump(); }
 
     // Writer-thread entry: runs the record writer with the host-silence
@@ -535,7 +558,7 @@ void video_loop(Session& session, uint8_t camera,
                 const std::function<void(uint8_t, bool, size_t)>& report) {
     // Load the detector once for the camera's lifetime (model load is heavy).
     std::unique_ptr<detect::IFaceDetector> detector;
-    if (!detect_model.empty()) {
+    if (!detect_model.empty() && detect_w > 0 && detect_h > 0) {
         auto d = detect::create_face_detector(detect_model, detect_w, detect_h,
                                               static_cast<float>(detect_score));
         if (d.hasValue())
@@ -676,24 +699,51 @@ void video_loop(Session& session, uint8_t camera,
 // sockets, not FunctionFS endpoint files.
 }  // namespace
 
-SecureUsbServer::SecureUsbServer(std::string certificate, std::string private_key,
-                                 std::vector<media::PipelineSpec> video_launch)
-    : certificate_(std::move(certificate)),
-      private_key_(std::move(private_key)),
-      video_launch_(std::move(video_launch)) {}
+SecureUsbServer::SecureUsbServer(Options options,
+                                 SecureUsbContext context,
+                                 std::unique_ptr<FfsGadget> gadget)
+    : context_(std::move(context)),
+      gadget_(std::move(gadget)),
+      video_launch_(std::move(options.video)),
+      control_dispatcher_(std::move(options.control_dispatcher)),
+      update_channel_factory_(std::move(options.update_channel_factory)) {
+    if (options.face_detection) {
+        detect_model_ = std::move(options.face_detection->model);
+        detect_score_ = options.face_detection->score_threshold;
+        detect_fps_ = options.face_detection->fps;
+    }
+}
 SecureUsbServer::~SecureUsbServer() { stop(); }
 
-bool SecureUsbServer::start(std::string* error) {
-    if (certificate_.empty() || private_key_.empty()) {
-        *error = "secure USB needs device certificate and private key";
-        return false;
-    }
-    if (access(certificate_.c_str(), R_OK) != 0 || access(private_key_.c_str(), R_OK) != 0) {
-        *error = "secure USB certificate/private key is not readable";
-        return false;
-    }
+base::Expected<std::unique_ptr<SecureUsbServer>, std::string>
+SecureUsbServer::create(Options options) {
+    if (options.certificate.empty() || options.private_key.empty())
+        return base::makeUnexpected(
+            std::string("secure USB needs device certificate and private key"));
+    if (options.face_detection &&
+        (options.face_detection->model.empty() ||
+         options.face_detection->score_threshold < 0.0 ||
+         options.face_detection->score_threshold > 1.0 ||
+         options.face_detection->fps < 0))
+        return base::makeUnexpected(
+            std::string("secure USB has invalid face-detection options"));
+
+    auto context = SecureUsbContext::create({options.certificate,
+                                             options.private_key});
+    if (!context)
+        return base::makeUnexpected(context.error());
+    auto gadget = FfsGadget::create();
+    if (!gadget)
+        return base::makeUnexpected("secure USB gadget: " + gadget.error());
+    return std::unique_ptr<SecureUsbServer>(new SecureUsbServer(
+        std::move(options), std::move(*context), std::move(*gadget)));
+}
+
+base::Expected<base::Unit, std::string> SecureUsbServer::start() {
+    if (worker_.joinable())
+        return base::makeUnexpected(std::string("secure USB is already started"));
     worker_ = std::thread(&SecureUsbServer::run, this);
-    return true;
+    return base::unit;
 }
 void SecureUsbServer::set_stream_enabled(uint8_t camera, bool enabled) {
     if (camera < kCameras)
@@ -709,14 +759,6 @@ void SecureUsbServer::stop() {
         wake_until_exited(worker_.native_handle(), worker_exited_);
         worker_.join();
     }
-}
-
-void SecureUsbServer::set_control_dispatcher(ControlDispatcher dispatcher) {
-    control_dispatcher_ = std::move(dispatcher);
-}
-
-void SecureUsbServer::set_update_channel_factory(UpdateChannelFactory factory) {
-    update_channel_factory_ = std::move(factory);
 }
 
 void SecureUsbServer::report_frame(uint8_t camera, bool streaming, size_t bytes) {
@@ -769,17 +811,6 @@ void SecureUsbServer::refresh_launch(uint8_t camera, media::PipelineSpec launch)
     relaunch_[camera] = true;
 }
 
-void SecureUsbServer::set_face_detection(std::string model, int input_width,
-                                         int input_height,
-                                         double score_threshold,
-                                         int detect_fps) {
-    detect_model_ = std::move(model);
-    detect_width_ = input_width;
-    detect_height_ = input_height;
-    detect_score_ = score_threshold;
-    detect_fps_ = detect_fps;
-}
-
 media::PipelineSpec SecureUsbServer::video_spec(uint8_t camera) const {
     if (camera < video_launch_.size() && !video_launch_[camera].source.empty())
         return video_launch_[camera];
@@ -801,14 +832,7 @@ void SecureUsbServer::run() {
     // returns early -- stop() waits on it before joining.
     SCOPE_EXIT { worker_exited_ = true; };
 
-    // The gadget owns the FunctionFS lifecycle: its destructor removes the
-    // function (by closing ep0) when this scope exits.
-    auto gadget = FfsGadget::create();
-    if (!gadget.hasValue()) {
-        XLOGF(ERR, "secure-usb: %s", gadget.error().c_str());
-        return;
-    }
-    const int ep0 = gadget.value()->control_endpoint();
+    const int ep0 = gadget_->control_endpoint();
 
     while (!stopping_) {
         serve_session(ep0);
@@ -841,7 +865,6 @@ void SecureUsbServer::serve_session(int ep0) {
     WireBuffer stream;
     std::vector<uint8_t> chunk(16 * 1024);
     size_t inbound_records = 0;
-    std::unique_ptr<SecureRecord> decrypt;
     std::unique_ptr<Session> session;
     std::vector<std::thread> workers;
 
@@ -859,7 +882,6 @@ void SecureUsbServer::serve_session(int ep0) {
             XLOGF(INFO, "secure-usb: session ended");
         }
         session.reset();
-        decrypt.reset();
     };
 
     bool endpoint_failed = false;
@@ -892,34 +914,45 @@ void SecureUsbServer::serve_session(int ep0) {
                                                  stream.data() + kClientHelloSize);
                 stream.consume(kClientHelloSize);
                 end_session();  // a new handshake supersedes any live session
-                auto response =
-                    DeviceHandshake::respond(hello, certificate_, private_key_);
-                if (!response.hasValue()) {
+                auto dead_state =
+                    std::make_shared<std::atomic<bool>>(false);
+                SecureUsbSession::Transport transport{
+                    {},
+                    [this, in, dead_state](const uint8_t* data, size_t size)
+                        -> base::Expected<size_t, std::string> {
+                        for (;;) {
+                            const ssize_t n = write(in, data, size);
+                            if (n >= 0) return static_cast<size_t>(n);
+                            if (errno == EINTR && !*dead_state && !stopping_)
+                                continue;
+                            return base::makeUnexpected(
+                                std::string("FunctionFS write failed: ") +
+                                strerror(errno));
+                        }
+                    },
+                };
+                auto secure = context_.accept(std::move(transport), hello);
+                if (!secure.hasValue()) {
                     XLOGF(WARN, "secure-usb: handshake rejected: %s",
-                          response.error().c_str());
+                          secure.error().c_str());
                     continue;
                 }
-                const auto& wire = response.value().first;
-                if (!endpoint_write_all(in, wire.data(), wire.size(), stopping_)) {
-                    endpoint_failed = true;
-                    break;
-                }
-                decrypt = std::make_unique<SecureRecord>(
-                    response.value().second.host_key, response.value().second.host_iv);
                 session = std::make_unique<Session>(
-                    in, response.value().second.device_key,
-                    response.value().second.device_iv, control_dispatcher_,
+                    std::move(dead_state), std::move(*secure), control_dispatcher_,
                     update_channel_factory_);
                 session->last_inbound_ms = Session::now_ms();
+                inbound_records = 0;
                 XLOGF(INFO, "secure-usb: authenticated session established");
                 Session* raw = session.get();
                 for (uint8_t camera = 0; camera < kCameras; ++camera) {
                     workers.emplace_back([this, raw, camera] {
+                        const media::PipelineSpec initial = video_spec(camera);
                         video_loop(
                             *raw, camera,
                             [this, camera] { return video_spec(camera); },
                             stream_enabled_[camera], detect_model_,
-                            detect_width_, detect_height_, detect_score_, detect_fps_,
+                            initial.detect_width, initial.detect_height,
+                            detect_score_, detect_fps_,
                             relaunch_[camera],
                             [this](uint8_t cam, void* element) {
                                 publish_source(cam, element);
@@ -933,7 +966,7 @@ void SecureUsbServer::serve_session(int ep0) {
                 workers.emplace_back([raw] { raw->writer_loop(); });
                 continue;
             }
-            if (!decrypt) {
+            if (!session) {
                 // Bytes before any handshake cannot be interpreted; keeping
                 // them would desynchronise the handshake to come.
                 if (stream.size() != 0) {
@@ -954,7 +987,7 @@ void SecureUsbServer::serve_session(int ep0) {
             }
             if (!framed.value())
                 break;  // await the remainder of the record
-            auto message = open_wire_record(wire, *decrypt);
+            auto message = session->open_record(wire);
             if (!message.hasValue()) {
                 XLOGF(WARN, "secure-usb: %s", message.error().c_str());
                 end_session();

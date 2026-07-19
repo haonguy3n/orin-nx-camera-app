@@ -291,6 +291,7 @@ src/camera/update/
   UpdateServer.{h,cpp}             TCP(+TLS) .swu upload server (port 8557)
 src/camera/base/                  Project base library (vendored folly-API mimics) (see below)
 ../common/proto/Protocol.h         Ports/methods/error-code constants shared with host-ui
+../common/secure/SecureUsbContext.* Reusable TLS-style secure context/session API
 config/                            default + videotestsrc test configs
 systemd/                           camera-streamer.service + first-boot TLS cert unit
 ```

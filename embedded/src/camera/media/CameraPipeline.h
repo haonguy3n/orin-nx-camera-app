@@ -1,17 +1,10 @@
-// One camera's capture+encode pipeline, shared by every transport.
+// One camera's typed capture+encode pipeline for direct frame transports.
 //
-// Capture is identical for all of them -- source, encoder, appsink -- and only
-// the delivery differs (encrypt to a USB endpoint, write to a socket, ...).
-// That shared half lives here; transports implement IFrameTransport and are
-// fanned out to.
-//
-// This is not only deduplication. Argus permits ONE consumer per camera, so
-// two transports cannot each open the sensor: today the secure USB path falls
-// back to pulling the camera's own RTSP mount back through loopback when RTSP
-// got there first (see SecureUsbServer::video_description). One pipeline per
-// camera with a fanout removes that fallback -- and with it the RTP
-// payload/depayload round trip and the silent loss of the detect branch that
-// the fallback caused.
+// USB consumes encoded access units through an appsink and implements
+// IFrameTransport below. Network mode remains owned by gst-rtsp-server because
+// it controls RTSP media lifetime and the RTP payloader, but both modes reuse
+// the same source fragments and PipelineBuilder composition rules. Only one
+// mode is active, so Argus still has exactly one consumer per camera.
 #pragma once
 
 #include <gst/app/gstappsink.h>

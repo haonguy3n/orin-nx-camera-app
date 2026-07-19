@@ -100,6 +100,7 @@ if(ENABLE_SECURE_USB)
         src/camera/detect/Snapshot.cpp
         src/camera/control/handlers/SnapshotHandler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureHandshake.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureUsbContext.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureWire.cpp)
     target_include_directories(camera-streamer PRIVATE ${OpenCV_INCLUDE_DIRS})
     target_link_libraries(camera-streamer PRIVATE OpenSSL::Crypto ${OpenCV_LIBS})

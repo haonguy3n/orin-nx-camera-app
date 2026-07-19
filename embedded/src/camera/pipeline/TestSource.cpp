@@ -12,21 +12,6 @@ std::string TestSource::build_source_fragment(const CameraConfig& cam) const {
            PipelineBuilder::caps_tail(cam) + " ! videoconvert";
 }
 
-std::string TestSource::build_launch(const CameraConfig& cam) const {
-    const bool h265 = cam.codec == "h265";
-    std::string p = "( " + build_source_fragment(cam) + " ! queue ! ";
-    // x26xenc bitrate is in kbit/s.
-    p += std::string(h265 ? "x265enc" : "x264enc") +
-         " tune=zerolatency key-int-max=30 bitrate=" +
-         std::to_string(cam.bitrate / 1000) + " ! ";
-    p += h265 ? "h265parse" : "h264parse";
-    p += " ! queue ! ";
-    p += h265 ? "rtph265pay" : "rtph264pay";
-    p += " name=pay0 pt=96";
-    p += " )";
-    return p;
-}
-
 void TestSource::apply_initial_settings(const CameraConfig& /*cam*/) const {
     // No sensor to configure.
 }

@@ -1,15 +1,14 @@
 // Camera source strategy interface (Strategy pattern).
 //
 // Each concrete strategy encapsulates everything source-specific:
-//  - how to build the GStreamer launch string for that source type
+//  - how to build the capture fragment for that source type
 //  - how to apply initial sensor settings at startup
 //  - how to apply runtime exposure/gain/trigger/ISP changes
 //  - what capabilities the source supports
 //
-// This replaces the if-else chains in the original build_launch() and
-// control dispatch, satisfying OCP (new source type = new class, no
-// existing code modified) and SRP (each source class has one reason to
-// change).
+// This replaces the source-specific if-else chains in pipeline construction
+// and control dispatch. PipelineBuilder composes these fragments for RTSP;
+// media::CameraPipeline composes them for direct encoded-frame transports.
 #pragma once
 
 #include <json-glib/json-glib.h>
@@ -35,12 +34,12 @@ public:
     // Source type identifier: "argus", "v4l2", "test".
     virtual std::string source_type() const = 0;
 
-    // Full gst_parse_launch pipeline string for this source, wrapped in ( )
-    // as required by gst_rtsp_media_factory_set_launch. The source element
-    // is always named "camsrc" so the stream controller can reach it live.
-    virtual std::string build_launch(const CameraConfig& cam) const = 0;
+    // Whether the encoded graph should use the platform encoder. Test sources
+    // override this for portable development builds; new source strategies do
+    // not require transport-specific type checks.
+    virtual bool uses_hardware_encoder() const { return true; }
 
-    // Just the capture part -- the bare fragment ending right before the
+    // The capture part -- the bare fragment ending right before the
     // encoder, "camsrc" inside, no "( )". This is what the usb transport's
     // media::PipelineSpec carries; the typed encode/detect chain is built
     // onto it programmatically (media::CameraPipeline::build).

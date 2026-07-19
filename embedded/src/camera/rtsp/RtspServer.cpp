@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "camera/pipeline/PipelineBuilder.h"
+#include "camera/pipeline/SourceFactory.h"
 
 #include <glib.h>
 
@@ -31,6 +32,22 @@ RtspServer::RtspServer(const Config& config)
     for (int i = 0; i < Config::kNumCameras; ++i)
         mounts_[i] = std::make_unique<MountController>(
             i, "/cam" + std::to_string(i));
+}
+
+std::string RtspServer::build_mount_launch(
+    int index, const ICameraSource& source) const {
+    const CameraConfig& cam = config_.cameras[index];
+    int detect_width = 0;
+    int detect_height = 0;
+    if (meta_sink_ != nullptr && !config_.detect_model.empty() &&
+        access(config_.detect_model.c_str(), R_OK) == 0) {
+        detect_width = config_.detect_width;
+        detect_height = PipelineBuilder::scaled_height(cam, detect_width);
+    }
+    return PipelineBuilder::rtsp_launch(
+        cam, source.build_source_fragment(cam),
+        source.uses_hardware_encoder(),
+        detect_width, detect_height);
 }
 
 // Full teardown so a new server can bind the same port right away (runtime
@@ -88,35 +105,18 @@ camera::base::Expected<camera::base::Unit, std::string> RtspServer::start() {
             continue;
         }
 
-        std::string launch = source->build_launch(cam);
-        // Face detection in network mode: tee a detect branch off alongside
-        // the RTP payloader. gst-rtsp-server only requires that "pay0" exists,
-        // so the appsink can live in the same bin; MountController picks it up
-        // on media-configure. Same swap trick the USB launch uses, so the
-        // source builders stay unaware of detection.
+        std::string launch = build_mount_launch(i, *source);
         if (meta_sink_ != nullptr && !config_.detect_model.empty() &&
             access(config_.detect_model.c_str(), R_OK) == 0) {
-            const std::string plain = PipelineBuilder::nvenc_tail(cam);
-            const size_t at = launch.rfind(plain);
-            if (at != std::string::npos) {
-                const int detect_h =
-                    cam.width > 0
-                        ? std::max(2, static_cast<int>(
-                                          static_cast<long long>(
-                                              config_.detect_width) *
-                                          cam.height / cam.width) & ~1)
-                        : config_.detect_width;
-                launch.replace(at, plain.size(),
-                               PipelineBuilder::nvenc_tail_with_detect(
-                                   cam, config_.detect_width, detect_h));
-                mounts_[i]->enable_detection(meta_sink_, config_.detect_model,
-                                             config_.detect_width, detect_h,
-                                             config_.detect_score,
-                                             config_.detect_fps);
-                XLOGF(INFO, "rtsp: cam%d detection enabled (%dx%d, score>=%.2f,"
-                            " %d fps)", i, config_.detect_width, detect_h,
-                      config_.detect_score, config_.detect_fps);
-            }
+            const int detect_h =
+                PipelineBuilder::scaled_height(cam, config_.detect_width);
+            mounts_[i]->enable_detection(meta_sink_, config_.detect_model,
+                                         config_.detect_width, detect_h,
+                                         config_.detect_score,
+                                         config_.detect_fps);
+            XLOGF(INFO, "rtsp: cam%d detection enabled (%dx%d, score>=%.2f,"
+                        " %d fps)", i, config_.detect_width, detect_h,
+                  config_.detect_score, config_.detect_fps);
         }
 
         // Offered RTP transports. TCP-interleaved by default: hosts with
@@ -222,7 +222,7 @@ void RtspServer::refresh_launch(int cam) {
     auto source = create_source(config_.cameras[cam].source);
     if (!source)
         return;
-    const std::string launch = source->build_launch(config_.cameras[cam]);
+    const std::string launch = build_mount_launch(cam, *source);
     mounts_[cam]->refresh_launch(launch);
 }
 

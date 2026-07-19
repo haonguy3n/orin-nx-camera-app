@@ -13,7 +13,6 @@ namespace camera {
 class V4l2Source : public ICameraSource {
 public:
     std::string source_type() const override { return "v4l2"; }
-    std::string build_launch(const CameraConfig& cam) const override;
     std::string build_source_fragment(const CameraConfig& cam) const override;
     void apply_initial_settings(const CameraConfig& cam) const override;
 

@@ -16,13 +16,13 @@
 
 #include "camera/config/Config.h"
 #include "camera/core/StreamController.h"
-#include "camera/pipeline/CameraSource.h"
-#include "camera/pipeline/SourceFactory.h"
 #include "camera/rtsp/MountController.h"
 #include "camera/base/Expected.h"
 #include "camera/base/Unit.h"
 
 namespace camera {
+
+class ICameraSource;
 
 class RtspServer : public IStreamController {
 public:
@@ -56,6 +56,8 @@ public:
     }
 
 private:
+    std::string build_mount_launch(int cam,
+                                   const ICameraSource& source) const;
     static gboolean on_watchdog(gpointer user_data);
     void disable_mount(int cam);
 

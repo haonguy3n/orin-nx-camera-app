@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <utility>
 
 #include "camera/base/Unit.h"
 
@@ -289,20 +290,64 @@ camera::base::Expected<SessionKeys, std::string> ClientHandshake::complete(
     return derive_session_keys(secret.value(), hello_.nonce, hello.value().nonce);
 }
 
+DeviceHandshake::DeviceHandshake(void* signing_key,
+                                 std::vector<uint8_t> certificate_der)
+    : signing_key_(signing_key),
+      certificate_der_(std::move(certificate_der)) {}
+
+DeviceHandshake::~DeviceHandshake() {
+    EVP_PKEY_free(static_cast<EVP_PKEY*>(signing_key_));
+}
+
+DeviceHandshake::DeviceHandshake(DeviceHandshake&& other) noexcept
+    : signing_key_(std::exchange(other.signing_key_, nullptr)),
+      certificate_der_(std::move(other.certificate_der_)) {}
+
+DeviceHandshake& DeviceHandshake::operator=(DeviceHandshake&& other) noexcept {
+    if (this == &other)
+        return *this;
+    EVP_PKEY_free(static_cast<EVP_PKEY*>(signing_key_));
+    signing_key_ = std::exchange(other.signing_key_, nullptr);
+    certificate_der_ = std::move(other.certificate_der_);
+    return *this;
+}
+
+camera::base::Expected<DeviceHandshake, std::string> DeviceHandshake::create(
+    const std::string& certificate_path,
+    const std::string& private_key_path) {
+    auto certificate = read_pem_certificate(certificate_path);
+    auto signing_key = read_pem_private_key(private_key_path);
+    if (!certificate.hasValue() || !signing_key.hasValue())
+        return camera::base::makeUnexpected(!certificate.hasValue() ? certificate.error()
+                                                                  : signing_key.error());
+
+    if (X509_check_private_key(certificate.value().get(),
+                               signing_key.value().get()) != 1)
+        return camera::base::makeUnexpected(
+            std::string("device certificate and private key do not match"));
+
+    const int cert_length = i2d_X509(certificate.value().get(), nullptr);
+    if (cert_length <= 0 || static_cast<size_t>(cert_length) > kMaxCertificateSize)
+        return camera::base::makeUnexpected(
+            std::string("device certificate DER encoding failed"));
+    std::vector<uint8_t> certificate_der(static_cast<size_t>(cert_length));
+    unsigned char* cert_cursor = certificate_der.data();
+    if (i2d_X509(certificate.value().get(), &cert_cursor) != cert_length)
+        return camera::base::makeUnexpected(
+            std::string("device certificate DER encoding failed"));
+
+    return DeviceHandshake(signing_key.value().release(),
+                           std::move(certificate_der));
+}
+
 camera::base::Expected<std::pair<std::vector<uint8_t>, SessionKeys>, std::string>
-DeviceHandshake::respond(const std::vector<uint8_t>& client_wire,
-                         const std::string& certificate_path,
-                         const std::string& private_key_path) {
+DeviceHandshake::respond(const std::vector<uint8_t>& client_wire) const {
     auto client = decode_client_hello(client_wire);
     if (!client.hasValue())
         return camera::base::makeUnexpected(client.error());
-    auto certificate = read_pem_certificate(certificate_path);
-    auto signing_key = read_pem_private_key(private_key_path);
     auto ephemeral = make_p256_key();
-    if (!certificate.hasValue() || !signing_key.hasValue() || !ephemeral.hasValue())
-        return camera::base::makeUnexpected(!certificate.hasValue() ? certificate.error()
-                                      : !signing_key.hasValue() ? signing_key.error()
-                                                                 : ephemeral.error());
+    if (!ephemeral.hasValue())
+        return camera::base::makeUnexpected(ephemeral.error());
     ServerHello server;
     if (RAND_bytes(server.nonce.data(), server.nonce.size()) != 1)
         return camera::base::makeUnexpected(std::string("secure USB random generation failed"));
@@ -310,14 +355,9 @@ DeviceHandshake::respond(const std::vector<uint8_t>& client_wire,
     if (!point.hasValue())
         return camera::base::makeUnexpected(point.error());
     server.public_key = point.value();
-    int cert_length = i2d_X509(certificate.value().get(), nullptr);
-    if (cert_length <= 0 || static_cast<size_t>(cert_length) > kMaxCertificateSize)
-        return camera::base::makeUnexpected(std::string("device certificate DER encoding failed"));
-    server.certificate_der.resize(cert_length);
-    unsigned char* cert_cursor = server.certificate_der.data();
-    if (i2d_X509(certificate.value().get(), &cert_cursor) != cert_length)
-        return camera::base::makeUnexpected(std::string("device certificate DER encoding failed"));
-    auto signature = sign(signing_key.value().get(), signature_input(client.value(), server));
+    server.certificate_der = certificate_der_;
+    auto signature = sign(static_cast<EVP_PKEY*>(signing_key_),
+                          signature_input(client.value(), server));
     if (!signature.hasValue())
         return camera::base::makeUnexpected(signature.error());
     server.signature_der = signature.value();

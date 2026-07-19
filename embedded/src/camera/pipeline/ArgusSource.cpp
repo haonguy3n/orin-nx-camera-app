@@ -23,15 +23,16 @@ std::string ArgusSource::build_source_fragment(const CameraConfig& cam) const {
     std::string p = "nvarguscamerasrc name=camsrc sensor-id=" +
          std::to_string(cam.sensor_id) +
          PipelineBuilder::argus_ranges(cam) +
-         " ! video/x-raw(memory:NVMM)," + PipelineBuilder::caps_tail(cam);
+         // gst_parse_bin_from_description tokenizes the ':' in a bare
+         // memory:NVMM caps expression as pipeline grammar and then tries to
+         // create an element named NVMM. An explicit capsfilter property is
+         // unambiguous (and is the programmatic equivalent of shell-quoting
+         // the caps in gst-launch).
+         " ! capsfilter caps=\"video/x-raw(memory:NVMM)," +
+         PipelineBuilder::caps_tail(cam) + "\"";
     if (cam.zoom > 1.0)
         p += PipelineBuilder::zoom_tail(cam);
     return p;
-}
-
-std::string ArgusSource::build_launch(const CameraConfig& cam) const {
-    return "( " + build_source_fragment(cam) + " ! " +
-           PipelineBuilder::nvenc_tail(cam) + " )";
 }
 
 void ArgusSource::apply_initial_settings(const CameraConfig& /*cam*/) const {

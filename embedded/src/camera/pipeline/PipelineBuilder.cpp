@@ -1,5 +1,7 @@
 #include "camera/pipeline/PipelineBuilder.h"
 
+#include <algorithm>
+
 #include <glib.h>
 
 namespace camera {
@@ -36,18 +38,40 @@ std::string PipelineBuilder::nvenc_tail(const CameraConfig& cam) {
     return s;
 }
 
-std::string PipelineBuilder::nvenc_tail_with_detect(const CameraConfig& cam,
-                                                    int detect_width,
-                                                    int detect_height) {
-    // The RTSP payloader keeps its name; detection hangs off a second tee leg.
-    // Detection is best-effort here exactly as it is on the USB path: the
-    // branch leaks (leaky queue) rather than backpressuring the tee into the
-    // encoder that RTSP clients are watching.
-    return "tee name=t  t. ! " + nvenc_tail(cam) + "  t. ! " +
-           detect_branch(detect_width, detect_height);
+std::string PipelineBuilder::rtsp_launch(const CameraConfig& cam,
+                                         const std::string& source_fragment,
+                                         bool hardware, int detect_width,
+                                         int detect_height) {
+    const bool h265 = cam.codec == "h265";
+    std::string tail;
+    if (hardware) {
+        tail = nvenc_tail(cam);
+    } else {
+        // x26Xenc takes kbit/s, unlike the NVIDIA encoder's bit/s property.
+        tail = "queue ! ";
+        tail += h265 ? "x265enc" : "x264enc";
+        tail += " tune=zerolatency key-int-max=30 bitrate=" +
+                std::to_string(cam.bitrate / 1000) + " ! ";
+        tail += h265 ? "h265parse" : "h264parse";
+        tail += " ! queue ! ";
+        tail += h265 ? "rtph265pay" : "rtph264pay";
+        tail += " name=pay0 pt=96";
+    }
+    if (detect_width > 0 && detect_height > 0)
+        tail = "tee name=t  t. ! " + tail + "  t. ! " +
+               detect_branch(detect_width, detect_height, hardware);
+    return "( " + source_fragment + " ! " + tail + " )";
 }
 
-std::string PipelineBuilder::detect_branch(int width, int height) {
+int PipelineBuilder::scaled_height(const CameraConfig& cam, int width) {
+    if (cam.width <= 0 || cam.height <= 0) return width;
+    const int height = static_cast<int>(
+        static_cast<long long>(width) * cam.height / cam.width);
+    return std::max(2, height & ~1);
+}
+
+std::string PipelineBuilder::detect_branch(int width, int height,
+                                           bool hardware) {
     // NVMM -> CPU BGRx via nvvidconv, straight into the appsink. Named
     // "detect" so Pipeline can find it.
     //
@@ -84,8 +108,11 @@ std::string PipelineBuilder::detect_branch(int width, int height) {
     // and detection silently never ran. nvvidconv emits system-memory BGRx by
     // itself, so the branch ends at the appsink and the detector drops the
     // padding byte (cheaper than a CPU colour conversion anyway).
-    return "queue leaky=downstream max-size-buffers=1"
-           " ! nvvidconv ! video/x-raw,format=BGRx"
+    const std::string conversion = hardware
+        ? "nvvidconv"
+        : "videoconvert ! videoscale";
+    return "queue leaky=downstream max-size-buffers=1 ! " + conversion +
+           " ! video/x-raw,format=BGRx"
            ",width=" + std::to_string(width) +
            ",height=" + std::to_string(height) +
            " ! appsink name=detect sync=false async=false"
@@ -109,9 +136,9 @@ std::string PipelineBuilder::zoom_crop(const CameraConfig& cam) {
 
 std::string PipelineBuilder::zoom_tail(const CameraConfig& cam) {
     return " ! nvvidconv name=zoomer" + zoom_crop(cam) +
-           " ! video/x-raw(memory:NVMM),format=NV12,width=" +
+           " ! capsfilter caps=\"video/x-raw(memory:NVMM),format=NV12,width=" +
            std::to_string(cam.width) + ",height=" +
-           std::to_string(cam.height);
+           std::to_string(cam.height) + "\"";
 }
 
 std::string PipelineBuilder::caps_tail(const CameraConfig& cam) {

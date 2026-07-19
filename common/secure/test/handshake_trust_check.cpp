@@ -1,20 +1,24 @@
 // Self-check for ClientHandshake::complete() trust-anchor verification.
 // Run from the repo root (one line):
-//   g++ -std=c++17 -I common -I embedded/src
-//   common/secure/test/handshake_trust_check.cpp common/secure/SecureHandshake.cpp
-//   embedded/src/camera/secure/KeySchedule.cpp
-//   -lcrypto -o /tmp/handshake_trust_check && /tmp/handshake_trust_check
+//   g++ -std=c++20 -pthread -I common -I embedded/src common/secure/test/handshake_trust_check.cpp common/secure/SecureHandshake.cpp common/secure/SecureUsbContext.cpp common/secure/SecureWire.cpp embedded/src/camera/secure/KeySchedule.cpp embedded/src/camera/secure/SecureRecord.cpp -lcrypto -o /tmp/handshake_trust_check && /tmp/handshake_trust_check
 //
 // Covers the trust model that verify_against_trust_anchor() implements: a CA
 // anchor accepts any device it signed, a self-signed anchor accepts only
 // itself (pinning), and an unrelated anchor accepts neither.
 #include <cassert>
+#include <cerrno>
+#include <cstring>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "camera/secure/SecureRecord.h"
 #include "secure/SecureHandshake.h"
+#include "secure/SecureUsbContext.h"
 #include "secure/SecureWire.h"
 
 namespace {
@@ -57,10 +61,163 @@ bool handshake_accepted(const std::string& device_cert, const std::string& devic
     assert(client.hasValue());
     const auto hello = client.value()->client_hello();
     assert(hello.hasValue());
-    auto response = camera::secure::DeviceHandshake::respond(
-        hello.value(), device_cert, device_key);
+    auto device = camera::secure::DeviceHandshake::create(device_cert,
+                                                          device_key);
+    assert(device.hasValue());
+    auto response = device->respond(hello.value());
     assert(response.hasValue());  // the device side never depends on the anchor
     return client.value()->complete(response.value().first, trust_anchor).hasValue();
+}
+
+camera::base::Expected<size_t, std::string> socket_read(
+    int fd, uint8_t* data, size_t size) {
+    const ssize_t n = read(fd, data, size);
+    if (n < 0)
+        return camera::base::makeUnexpected(std::string(strerror(errno)));
+    return static_cast<size_t>(n);
+}
+
+camera::base::Expected<size_t, std::string> socket_write(
+    int fd, const uint8_t* data, size_t size) {
+    const ssize_t n = write(fd, data, size);
+    if (n < 0)
+        return camera::base::makeUnexpected(std::string(strerror(errno)));
+    return static_cast<size_t>(n);
+}
+
+void write_all(int fd, const std::vector<uint8_t>& bytes) {
+    size_t offset = 0;
+    while (offset != bytes.size()) {
+        auto n = socket_write(fd, bytes.data() + offset, bytes.size() - offset);
+        assert(n.hasValue() && n.value() != 0);
+        offset += n.value();
+    }
+}
+
+std::vector<uint8_t> read_server_hello(int fd) {
+    constexpr size_t fixed = 4 + 32 + 65 + 2 + 2;
+    std::vector<uint8_t> wire(fixed);
+    size_t have = 0;
+    while (have != fixed) {
+        auto n = socket_read(fd, wire.data() + have, fixed - have);
+        assert(n.hasValue() && n.value() != 0);
+        have += n.value();
+    }
+    const size_t cert = (static_cast<size_t>(wire[101]) << 8) | wire[102];
+    const size_t signature = (static_cast<size_t>(wire[103]) << 8) | wire[104];
+    wire.resize(fixed + cert + signature);
+    while (have != wire.size()) {
+        auto n = socket_read(fd, wire.data() + have, wire.size() - have);
+        assert(n.hasValue() && n.value() != 0);
+        have += n.value();
+    }
+    return wire;
+}
+
+// Public TLS-like API: initialize identity once, accept over arbitrary I/O,
+// then exchange authenticated channel messages through the returned session.
+void check_context_api(const std::string& cert, const std::string& key) {
+    auto context = camera::secure::SecureUsbContext::create({cert, key});
+    assert(context.hasValue());
+
+    int sockets[2] = {-1, -1};
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+    std::thread device([&] {
+        auto session = context->accept({
+            [fd = sockets[0]](uint8_t* data, size_t size) {
+                return socket_read(fd, data, size);
+            },
+            [fd = sockets[0]](const uint8_t* data, size_t size) {
+                return socket_write(fd, data, size);
+            },
+        });
+        assert(session.hasValue());
+        auto request = session->receive();
+        assert(request.hasValue());
+        assert(request->channel == camera::secure::Channel::Control);
+        assert(request->payload == std::vector<uint8_t>({'p', 'i', 'n', 'g'}));
+        const std::vector<uint8_t> reply{'p', 'o', 'n', 'g'};
+        assert(session->send(camera::secure::Channel::Control, 0, reply));
+        close(sockets[0]);
+    });
+
+    auto client = camera::secure::ClientHandshake::create();
+    assert(client.hasValue());
+    auto hello = client.value()->client_hello();
+    assert(hello.hasValue());
+    write_all(sockets[1], hello.value());
+    auto keys = client.value()->complete(read_server_hello(sockets[1]), cert);
+    assert(keys.hasValue());
+
+    camera::secure::SecureRecord encrypt(keys->host_key, keys->host_iv);
+    camera::secure::SecureRecord decrypt(keys->device_key, keys->device_iv);
+    auto request = camera::secure::make_wire_record(
+        camera::secure::Channel::Control, 0,
+        std::vector<uint8_t>({'p', 'i', 'n', 'g'}), encrypt);
+    assert(request.hasValue());
+    write_all(sockets[1], request.value());
+
+    camera::secure::WireBuffer input;
+    std::vector<uint8_t> record;
+    while (true) {
+        auto framed = input.next(&record);
+        assert(framed.hasValue());
+        if (framed.value())
+            break;
+        uint8_t chunk[1024];
+        auto n = socket_read(sockets[1], chunk, sizeof(chunk));
+        assert(n.hasValue() && n.value() != 0);
+        input.append(chunk, n.value());
+    }
+    auto reply = camera::secure::open_wire_record(record, decrypt);
+    assert(reply.hasValue());
+    assert(reply->payload == std::vector<uint8_t>({'p', 'o', 'n', 'g'}));
+    close(sockets[1]);
+    device.join();
+}
+
+// Adapter form used by FunctionFS: the adapter owns stream framing so it can
+// recognize a replacement ClientHello, then hands complete records to the
+// same SecureUsbSession used for outbound traffic.
+void check_context_adapter_api(const std::string& cert, const std::string& key) {
+    auto context = camera::secure::SecureUsbContext::create({cert, key});
+    assert(context.hasValue());
+    auto client = camera::secure::ClientHandshake::create();
+    assert(client.hasValue());
+    auto hello = client.value()->client_hello();
+    assert(hello.hasValue());
+
+    std::vector<uint8_t> device_output;
+    auto session = context->accept(
+        {{}, [&device_output](const uint8_t* data, size_t size)
+                 -> camera::base::Expected<size_t, std::string> {
+             device_output.insert(device_output.end(), data, data + size);
+             return size;
+         }},
+        hello.value());
+    assert(session.hasValue());
+    auto keys = client.value()->complete(device_output, cert);
+    assert(keys.hasValue());
+
+    camera::secure::SecureRecord host_encrypt(keys->host_key, keys->host_iv);
+    auto request = camera::secure::make_wire_record(
+        camera::secure::Channel::Control, 3,
+        std::vector<uint8_t>({'p', 'i', 'n', 'g'}), host_encrypt);
+    assert(request.hasValue());
+    auto opened = session->open_record(request.value());
+    assert(opened.hasValue());
+    assert(opened->stream == 3);
+    assert(opened->payload == std::vector<uint8_t>({'p', 'i', 'n', 'g'}));
+
+    device_output.clear();
+    const std::vector<uint8_t> reply{'p', 'o', 'n', 'g'};
+    assert(session->send(camera::secure::Channel::Control, 3, reply));
+    camera::secure::SecureRecord host_decrypt(keys->device_key,
+                                              keys->device_iv);
+    auto decoded = camera::secure::open_wire_record(device_output, host_decrypt);
+    assert(decoded.hasValue());
+    assert(decoded->stream == 3);
+    assert(decoded->payload == reply);
 }
 
 // Framing: a bulk transfer carries an arbitrary slice of the record stream,
@@ -233,6 +390,14 @@ int main() {
 
     const std::string device_crt = path("device") + ".crt";
     const std::string device_key = path("device") + ".key";
+
+    check_context_api(device_crt, device_key);
+    check_context_adapter_api(device_crt, device_key);
+
+    // Identity errors fail during create(), before FunctionFS is published or
+    // a host connects.
+    assert(!camera::secure::SecureUsbContext::create(
+        {device_crt, path("impostor") + ".key"}));
 
     // CA anchor: accepts a device the CA signed.
     assert(handshake_accepted(device_crt, device_key, path("real-ca") + ".crt"));

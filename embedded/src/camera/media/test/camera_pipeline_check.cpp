@@ -58,6 +58,22 @@ PipelineSpec spec(int width) {
 int main(int argc, char** argv) {
     gst_init(&argc, &argv);
 
+    // A bare video/x-raw(memory:NVMM) expression is ambiguous to
+    // gst_parse_bin_from_description: it interprets the colon as pipeline
+    // grammar and reports `no element "NVMM"`. Source fragments use this
+    // explicit capsfilter form so the same string works on JetPack's older
+    // GStreamer and current development hosts.
+    {
+        GError* failure = nullptr;
+        GstElement* parsed = gst_parse_bin_from_description(
+            "fakesrc ! capsfilter "
+            "caps=\"video/x-raw(memory:NVMM),format=NV12\"",
+            TRUE, &failure);
+        assert(parsed != nullptr && failure == nullptr);
+        gst_object_unref(parsed);
+        std::printf("[0] NVMM source caps parse through capsfilter: ok\n");
+    }
+
     CameraPipeline pipeline(1, spec(320));
     Recorder a("a"), b("b");
     // Two transports on ONE pipeline: the whole point, since Argus allows only

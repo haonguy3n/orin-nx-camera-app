@@ -3,53 +3,56 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "camera/media/CameraPipeline.h"
+#include "camera/base/Expected.h"
+#include "camera/base/Unit.h"
+#include "camera/secure/FfsGadget.h"
+#include "secure/SecureUsbContext.h"
 
 namespace camera::secure {
 
-// Owns the FunctionFS vendor interface in the camera-streamer process.  It is
-// deliberately additive: RTSP/control over CDC-NCM continue to be served by
-// the normal application sockets.
+// Owns the FunctionFS vendor interface in the camera-streamer process. In USB
+// mode it carries video/control/update while CDC-NCM remains only for recovery.
 class SecureUsbServer {
 public:
-    // `video_launch` holds one media::PipelineSpec per camera: the capture
-    // fragment plus typed encode/detect parameters, so frames are taken
-    // straight from the encoder. An empty spec disables that camera.
-    SecureUsbServer(std::string certificate, std::string private_key,
-                    std::vector<media::PipelineSpec> video_launch = {});
-    ~SecureUsbServer();
-    bool start(std::string* error);
-    void stop();
+    using ControlDispatcher = std::function<std::string(const std::string&)>;
+    using UpdateChannelFactory = std::function<int()>;
 
-    // Enable on-device face detection: each camera's pipeline grows a raw
-    // branch and a detection thread that emits boxes over Channel::Meta.
-    // `model` is the YuNet .onnx path; empty (default) leaves detection off.
-    // Must be called before start().
-    void set_face_detection(std::string model, int input_width, int input_height,
-                            double score_threshold, int detect_fps);
+    struct FaceDetection {
+        std::string model;
+        double score_threshold = 0.45;
+        int fps = 10;
+    };
+
+    struct Options {
+        std::string certificate;
+        std::string private_key;
+        // One typed pipeline per camera; an empty spec disables that camera.
+        std::vector<media::PipelineSpec> video;
+        std::optional<FaceDetection> face_detection;
+        ControlDispatcher control_dispatcher;
+        UpdateChannelFactory update_channel_factory;
+    };
+
+    // Validates credentials and detection settings and publishes FunctionFS.
+    // Like SSLContext::create(), success means initialization is complete and
+    // the object is safe to use; there is no order-dependent setter phase.
+    [[nodiscard]] static base::Expected<std::unique_ptr<SecureUsbServer>, std::string>
+    create(Options options);
+
+    ~SecureUsbServer();
+    base::Expected<base::Unit, std::string> start();
+    void stop();
     // set-stream: starts/stops one camera's video push without touching the
     // session. Off = the video loop parks and its pipeline (and sensor) is
     // released; on = it respawns within ~200 ms.
     void set_stream_enabled(uint8_t camera, bool enabled);
-
-    // Dispatches one control request line and returns the reply line. Set by
-    // the application; when present, Channel::Control records are handled
-    // IN-PROCESS instead of being written to a loopback TCP server. The
-    // implementation is responsible for running on the GLib main loop.
-    using ControlDispatcher = std::function<std::string(const std::string&)>;
-    void set_control_dispatcher(ControlDispatcher dispatcher);
-
-    // Opens an in-process channel to the update server and returns the
-    // writable end, or -1. Set by the application; when present, Update
-    // records go through an anonymous socketpair instead of a TCP connection
-    // to 127.0.0.1:8557 -- same fd semantics (close = end of upload), nothing
-    // on the network stack.
-    using UpdateChannelFactory = std::function<int()>;
-    void set_update_channel_factory(UpdateChannelFactory factory);
 
     // Live per-camera state, so get-status can report the transport that is
     // actually serving. Without this, usb mode reports an empty status: the
@@ -79,6 +82,8 @@ public:
     void refresh_launch(uint8_t camera, media::PipelineSpec launch);
 
 private:
+    SecureUsbServer(Options options, SecureUsbContext context,
+                    std::unique_ptr<FfsGadget> gadget);
     void run();
     // Serves one authenticated session, returning when it dies. Blocks, so it
     // owns its own threads: FunctionFS endpoint files implement no .poll, and
@@ -92,16 +97,14 @@ private:
     // Called per frame by the video loops.
     void report_frame(uint8_t camera, bool streaming, size_t bytes);
 
-    std::string certificate_;
-    std::string private_key_;
+    SecureUsbContext context_;
+    std::unique_ptr<FfsGadget> gadget_;
     std::vector<media::PipelineSpec> video_launch_;
     ControlDispatcher control_dispatcher_;
     UpdateChannelFactory update_channel_factory_;
     std::string detect_model_;
-    int detect_width_ = 320;
     double detect_score_ = 0.45;
     int detect_fps_ = 10;
-    int detect_height_ = 320;
     std::atomic<bool> stream_enabled_[2] = {{true}, {true}};
     // Live source element per camera, published by the video loop while its
     // pipeline is up. Guarded because the control server pokes it from the

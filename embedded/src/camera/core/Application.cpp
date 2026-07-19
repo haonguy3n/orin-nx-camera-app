@@ -17,6 +17,7 @@
 #include "camera/control/ControlServer.h"
 #include "camera/control/handlers/RegisterHandlers.h"
 #include "camera/lib/net/NetworkResolver.h"
+#include "camera/pipeline/PipelineBuilder.h"
 #include "camera/pipeline/SourceFactory.h"
 #ifdef ENABLE_SECURE_USB
 #include "camera/core/UsbAwareStreamController.h"
@@ -37,22 +38,6 @@ bool face_detection_available(const Config& cfg) {
            && access(cfg.detect_model.c_str(), R_OK) == 0;
 }
 
-// Detector working height for a camera: the configured width scaled to the
-// camera's own aspect ratio, rounded even.
-//
-// It is NOT square. Scaling a 4:3 sensor (1440x1080) into a 320x320 detector
-// input squashes every face horizontally by 33%, and YuNet -- trained on
-// undistorted faces -- then misses most of them. This was the reason face
-// detection "ran" but found nothing.
-int detect_height_for(const CameraConfig& cam, int detect_width) {
-    if (cam.width <= 0 || cam.height <= 0) return detect_width;
-    const int height =
-        static_cast<int>(static_cast<long long>(detect_width) * cam.height /
-                         cam.width);
-    const int even = height & ~1;
-    return even < 2 ? 2 : even;
-}
-
 // What the secure USB transport should build for one camera: the source's
 // capture fragment plus typed encode/detect parameters. The tee and both
 // branches are constructed as objects in media::CameraPipeline -- the old
@@ -68,12 +53,13 @@ media::PipelineSpec usb_pipeline_spec(const CameraConfig& cam,
     spec.h265 = cam.codec == "h265";
     spec.bitrate = cam.bitrate;
     // The test source has no NVIDIA hardware behind it (dev hosts, CI).
-    spec.hw = cam.source != "test";
+    spec.hw = source->uses_hardware_encoder();
     // With a detection model present, the pipeline grows the raw branch the
     // detector consumes.
     if (face_detection_available(cfg)) {
         spec.detect_width = cfg.detect_width;
-        spec.detect_height = detect_height_for(cam, cfg.detect_width);
+        spec.detect_height =
+            PipelineBuilder::scaled_height(cam, cfg.detect_width);
     }
     return spec;
 }
@@ -305,8 +291,8 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
         // device served RTSP onto a link the host could not reach.
         secure::FfsGadget::release_base_gadget();
     } else {
-        // Secure USB is additive. Failure to expose the optional FunctionFS
-        // interface must never take down the established NCM RTSP path.
+        // Failure to expose FunctionFS must not take down CDC-NCM, which is
+        // still needed for the recovery update path.
         // Direct encoder tap only when the RTSP server is not also driving
         // the sensors: Argus permits a single consumer per camera.
         std::vector<media::PipelineSpec> video_launch;
@@ -318,21 +304,23 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
                         : media::PipelineSpec{});
             }
         }
-        secure_usb_ = std::make_unique<secure::SecureUsbServer>(
+        secure::SecureUsbServer::Options usb_options;
+        usb_options.certificate =
             config_.tls_cert.empty() ? "/etc/camera-streamer/tls/server.crt"
-                                     : config_.tls_cert,
+                                     : config_.tls_cert;
+        usb_options.private_key =
             config_.tls_key.empty() ? "/etc/camera-streamer/tls/server.key"
-                                    : config_.tls_key,
-            std::move(video_launch));
+                                    : config_.tls_key;
+        usb_options.video = std::move(video_launch);
         if (usb_only && face_detection_available(config_)) {
             // Aspect-correct working size, matching the detect branch caps so
             // the detector never rescales (and never re-distorts) the frame.
             const int detect_h =
-                detect_height_for(config_.cameras[0], config_.detect_width);
-            secure_usb_->set_face_detection(config_.detect_model,
-                                            config_.detect_width, detect_h,
-                                            config_.detect_score,
-                                            config_.detect_fps);
+                PipelineBuilder::scaled_height(config_.cameras[0],
+                                               config_.detect_width);
+            usb_options.face_detection = secure::SecureUsbServer::FaceDetection{
+                config_.detect_model, config_.detect_score,
+                config_.detect_fps};
             XLOGF(INFO,
                   "face detection enabled: %s (%dx%d, score>=%.2f, %d fps)",
                   config_.detect_model.c_str(), config_.detect_width,
@@ -347,12 +335,12 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
         if (control_context_) {
             ControlContext* ctx = control_context_.get();
             ControlRegistry* registry = &registry_;
-            secure_usb_->set_control_dispatcher(
+            usb_options.control_dispatcher =
                 [ctx, registry](const std::string& line) {
                     return run_on_main_loop([ctx, registry, &line] {
                         return dispatch_request(*registry, *ctx, line.c_str());
                     });
-                });
+                };
         }
         // Update in-process: an anonymous socketpair replaces the TCP
         // connection to 127.0.0.1:8557. The far end is adopted by the update
@@ -361,7 +349,7 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
         // underneath it is, which is the point: nothing on the network stack.
         if (update_server_) {
             UpdateServer* server = update_server_.get();
-            secure_usb_->set_update_channel_factory([server]() -> int {
+            usb_options.update_channel_factory = [server]() -> int {
                 int pair[2] = {-1, -1};
                 if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) {
                     XLOGF(WARN, "update: socketpair failed: %s", strerror(errno));
@@ -372,17 +360,23 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
                     return -1;
                 }
                 return pair[1];  // tunnel writes the upload here
-            });
+            };
         }
-        std::string secure_error;
-        if (!secure_usb_->start(&secure_error)) {
-            XLOGF(WARN, "secure-usb disabled: %s", secure_error.c_str());
-            secure_usb_.reset();
+        auto secure_usb = secure::SecureUsbServer::create(std::move(usb_options));
+        if (!secure_usb) {
+            XLOGF(WARN, "secure-usb disabled: %s", secure_usb.error().c_str());
             // Same reason as the network-mode path: if we are not going to own
             // FunctionFS, give the gadget back so NCM/ACM binds and the device
             // stays reachable -- including over the recovery channel, which is
             // exactly what is needed when secure USB has just failed.
             secure::FfsGadget::release_base_gadget();
+        } else {
+            secure_usb_ = std::move(*secure_usb);
+            if (auto started = secure_usb_->start(); !started) {
+                XLOGF(WARN, "secure-usb disabled: %s", started.error().c_str());
+                secure_usb_.reset();
+                secure::FfsGadget::release_base_gadget();
+            }
         }
     }
 #endif

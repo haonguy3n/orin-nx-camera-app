@@ -24,11 +24,6 @@ std::string V4l2Source::build_source_fragment(const CameraConfig& cam) const {
            PipelineBuilder::zoom_tail(cam);
 }
 
-std::string V4l2Source::build_launch(const CameraConfig& cam) const {
-    return "( " + build_source_fragment(cam) + " ! " +
-           PipelineBuilder::nvenc_tail(cam) + " )";
-}
-
 void V4l2Source::apply_initial_settings(const CameraConfig& cam) const {
     // Config sensor settings for the v4l2 path go straight to the VC
     // driver's V4L2 controls (no pipeline needed). Failures are warnings:
