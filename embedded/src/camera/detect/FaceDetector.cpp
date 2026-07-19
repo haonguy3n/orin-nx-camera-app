@@ -43,14 +43,20 @@ public:
         try {
             const cv::Mat frame(frame_height, frame_width, CV_8UC3,
                                 const_cast<uint8_t*>(bgr), static_cast<size_t>(stride));
-            cv::Mat resized;
-            cv::resize(frame, resized, input_);
-            yunet_->setInputSize(input_);
+            // Detect at the frame's own size rather than resizing to a fixed
+            // input. The pipeline already scales to the detector's working
+            // resolution preserving the camera's aspect ratio, so resizing
+            // again to a square here would re-introduce exactly the distortion
+            // that made YuNet miss faces -- and cost a copy per frame.
+            const cv::Size size(frame_width, frame_height);
+            if (size != input_) {
+                yunet_->setInputSize(size);
+                input_ = size;
+            }
             cv::Mat faces;
-            yunet_->detect(resized, faces);
+            yunet_->detect(frame, faces);
 
-            const float sx = static_cast<float>(frame_width) / input_.width;
-            const float sy = static_cast<float>(frame_height) / input_.height;
+            // Boxes come back in frame coordinates already.
             boxes.reserve(faces.rows);
             for (int i = 0; i < faces.rows; ++i) {
                 // Row layout: x, y, w, h, [5 landmarks], score.

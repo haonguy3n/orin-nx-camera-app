@@ -105,10 +105,12 @@ struct Config {
     // branch and a detection thread that emits face boxes over the metadata
     // channel, and the host draws the overlay. No separate enable flag -- the
     // model's presence (an image build choice, CAMERA_FACE_MODEL) is the
-    // switch. detect_width/height are the detector's working resolution.
+    // switch. detect_width is the detector's working width.
     std::string detect_model = "/usr/share/camera-streamer/face_detection_yunet.onnx";
+    // Detector working width. The height is not configurable: it follows the
+    // camera's aspect ratio, because squashing the frame to a fixed shape
+    // distorts faces and YuNet then misses them.
     int detect_width = 320;
-    int detect_height = 320;
 
     CameraConfig cameras[kNumCameras];
 };

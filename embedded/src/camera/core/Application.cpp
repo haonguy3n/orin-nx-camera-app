@@ -28,6 +28,22 @@ bool face_detection_available(const Config& cfg) {
            && access(cfg.detect_model.c_str(), R_OK) == 0;
 }
 
+// Detector working height for a camera: the configured width scaled to the
+// camera's own aspect ratio, rounded even.
+//
+// It is NOT square. Scaling a 4:3 sensor (1440x1080) into a 320x320 detector
+// input squashes every face horizontally by 33%, and YuNet -- trained on
+// undistorted faces -- then misses most of them. This was the reason face
+// detection "ran" but found nothing.
+int detect_height_for(const CameraConfig& cam, int detect_width) {
+    if (cam.width <= 0 || cam.height <= 0) return detect_width;
+    const int height =
+        static_cast<int>(static_cast<long long>(detect_width) * cam.height /
+                         cam.width);
+    const int even = height & ~1;
+    return even < 2 ? 2 : even;
+}
+
 std::string usb_video_launch(ISourceFactory& factory, const CameraConfig& cam,
                              const Config& cfg) {
     auto source = factory.create(cam.source);
@@ -45,7 +61,8 @@ std::string usb_video_launch(ISourceFactory& factory, const CameraConfig& cam,
     std::string tail = PipelineBuilder::appsink_tail(cam);
     if (face_detection_available(cfg)) {
         tail = "tee name=t  t. ! " + tail + "  t. ! "
-             + PipelineBuilder::detect_branch(cfg.detect_width, cfg.detect_height);
+             + PipelineBuilder::detect_branch(
+                   cfg.detect_width, detect_height_for(cam, cfg.detect_width));
     }
     launch.replace(at, rtp_tail.size(), tail);
     return launch;
@@ -185,12 +202,15 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
                                     : config_.tls_key,
             std::move(video_launch));
         if (usb_only && face_detection_available(config_)) {
+            // Aspect-correct working size, matching the detect branch caps so
+            // the detector never rescales (and never re-distorts) the frame.
+            const int detect_h =
+                detect_height_for(config_.cameras[0], config_.detect_width);
             secure_usb_->set_face_detection(config_.detect_model,
-                                            config_.detect_width,
-                                            config_.detect_height);
+                                            config_.detect_width, detect_h);
             XLOGF(INFO, "face detection enabled: %s (%dx%d)",
                   config_.detect_model.c_str(), config_.detect_width,
-                  config_.detect_height);
+                  detect_h);
         } else if (usb_only && !config_.detect_model.empty()) {
             XLOGF(INFO, "face detection off: model not found at %s",
                   config_.detect_model.c_str());
