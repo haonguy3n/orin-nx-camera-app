@@ -7,18 +7,16 @@
 #include <QVector>
 #include <QWidget>
 
-class FaceOverlay;
+class FrameView;
 class QLabel;
 class QMediaPlayer;
 class QStackedWidget;
 class QTimer;
 class QVideoSink;
-class QVideoWidget;
 
-// One camera's video surface: QMediaPlayer + QVideoWidget with an idle
-// black placeholder. Qt 6's QVideoWidget renders uninitialized GPU memory
-// when idle, so a QStackedWidget swaps between a black placeholder and the
-// live video surface (raised only when frames actually arrive).
+// One camera's video surface: QMediaPlayer or the secure USB decoder feeds
+// a QVideoSink, and FrameView paints the frames plus any detection boxes.
+// A QStackedWidget swaps in a black placeholder when no video is live.
 class VideoPane : public QWidget
 {
     Q_OBJECT
@@ -46,11 +44,11 @@ signals:
 private:
     QString m_name;
     QMediaPlayer *m_player = nullptr;
-    QVideoWidget *m_video = nullptr;
+    FrameView *m_view = nullptr;
+    QVideoSink *m_sink = nullptr;
     QLabel *m_status = nullptr;
     QStackedWidget *m_stack = nullptr;
     QWidget *m_placeholder = nullptr;
-    FaceOverlay *m_overlay = nullptr;  // lazily created on first setFaces
 
     void showVideo(bool live);
 

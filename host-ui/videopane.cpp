@@ -1,6 +1,6 @@
 #include "videopane.h"
 
-#include "faceoverlay.h"
+#include "frameview.h"
 
 #include <QLabel>
 #include <QMediaPlayer>
@@ -10,7 +10,6 @@
 #include <QVBoxLayout>
 #include <QVideoFrame>
 #include <QVideoSink>
-#include <QVideoWidget>
 
 VideoPane::VideoPane(const QString &name, QWidget *parent)
     : QWidget(parent)
@@ -49,12 +48,15 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
     emptyLayout->addWidget(emptyTitle);
     emptyLayout->addWidget(emptyHint);
 
-    m_video = new QVideoWidget(this);
+    m_view = new FrameView(this);
+    // Our own sink, so BOTH transports (QMediaPlayer for RTSP and the
+    // secure USB decoder) land in one place we can paint from.
+    m_sink = new QVideoSink(this);
 
     m_stack = new QStackedWidget(this);
     m_stack->setMinimumSize(320, 240);
     m_stack->addWidget(m_placeholder);
-    m_stack->addWidget(m_video);
+    m_stack->addWidget(m_view);
     showVideo(false);
 
     m_status = new QLabel(this);
@@ -66,7 +68,7 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
     layout->addWidget(m_status);
 
     m_player = new QMediaPlayer(this);
-    m_player->setVideoOutput(m_video);
+    m_player->setVideoSink(m_sink);
 
     setStatusText("disconnected");
 
@@ -104,9 +106,12 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
                 }
             });
 
-    connect(m_video->videoSink(), &QVideoSink::videoFrameChanged, this,
+    connect(m_sink, &QVideoSink::videoFrameChanged, this,
             [this](const QVideoFrame &frame) {
                 if (frame.isValid() && m_active) {
+                    // Convert once here; FrameView paints this image and the
+                    // detection boxes together (see frameview.h for why).
+                    m_view->setImage(frame.toImage());
                     // Emitted from a decode worker thread; this slot runs on
                     // the GUI thread via a queued connection, so the counter
                     // needs no lock. The m_active guard drops frames that were
@@ -168,8 +173,8 @@ void VideoPane::stop()
     m_player->setSource(QUrl());
     m_live = false;
     m_fps = 0.0;
-    if (m_overlay)
-        m_overlay->setBoxes({});  // clear stale boxes
+    if (m_view)
+        m_view->clear();  // drop the last frame and any stale boxes
     setStatusText("disconnected");
     showVideo(false);
 }
@@ -200,24 +205,18 @@ void VideoPane::refreshStatus()
 
 QVideoSink *VideoPane::videoSink() const
 {
-    return m_video->videoSink();
+    return m_sink;
 }
 
 void VideoPane::setFaces(const QVector<QRectF> &normalized)
 {
-    if (!m_overlay) {
-        m_overlay = new FaceOverlay(this);
-        m_overlay->show();
-    }
-    // Resync geometry to the video area each update (detection is ~10/s, so
-    // this cheaply tracks window resizes without a resizeEvent override) and
-    // keep it above the video surface.
-    m_overlay->setGeometry(m_stack->geometry());
-    m_overlay->raise();
-    m_overlay->setBoxes(normalized);
+    // Straight to the video surface: it draws the boxes in the same paint as
+    // the frame, so there is no overlay widget to keep positioned or raised.
+    if (m_view)
+        m_view->setBoxes(normalized);
 }
 
 void VideoPane::showVideo(bool live)
 {
-    m_stack->setCurrentWidget(live ? m_video : m_placeholder);
+    m_stack->setCurrentWidget(live ? m_view : m_placeholder);
 }
