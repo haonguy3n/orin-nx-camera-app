@@ -14,29 +14,38 @@ Anything else — `both`, or an encrypted record protocol over TCP — is
 deliberately not supported. See "Rejected" below.
 
 ```
-IMX296 -> Argus/ISP -> CameraPipeline (one per sensor)
-                              |
-                        tee --+-------------+
-                        |                   |
-                   DETECTION             VIDEO
-                   YuNet/CUDA           H.265 encode
-                        |                   |
-        ================+===================+================
-          usb mode                     network mode
-        ----------------------------   ----------------------------
-          SESSION / MUX                  RTSP media (gst-rtsp-server)
-          Video|Control|Update|Meta      + detect appsink beside pay0
-          ENCRYPT (ChaCha20-Poly1305)    boxes -> ControlServer::broadcast
-          ep1/ep2 bulk                   RTP + control TCP
-        ================+===================+================
-                        |                   |
-                    DECRYPT             ControlClient event
-                        |                   |
-                        +--------+----------+
-                                 |
-                          applyFaceMeta -> FrameView
-                              (one renderer, both modes)
+                     |          Camera streamer
+  IMX296 --> ARGUS --|
+                     |     CameraPipeline (one per sensor)
+                     |          |                 |
+                     |      detection         video stream
+                     |      YuNet/CUDA        H.265 encode
+                     |          |                 |
+                     | ---------+-----------------+-----------------------
+                     |            Encrypt / decrypt        (usb mode only)
+                     |          ChaCha20-Poly1305, ECDHE-P256
+                     |          channels: Video Control Update Meta
+                     | ---------+-----------------+-----------------------
+                     |         USB                     network
+                     |      ep1/ep2 bulk            RTSP/RTP + control TCP
+                     | ------------------------------------------------
+                     |                  the wire
+                     | ------------------------------------------------
+                     |            Decrypt          (usb mode only)
+                     | ---------+-----------------+-----------------------
+                     |          |                 |
+                     |     boxes: Meta        boxes: control event
+                     |          |                 |
+                     |          +--------+--------+
+                     |                   |
+                     |        applyFaceMeta -> FrameView
+                     |            HOST UI (one renderer)
 ```
+
+The encrypt/decrypt band spans the full width in `usb` mode. In `network` mode
+it is absent: RTSP video is in the clear and boxes ride a control event. That
+asymmetry is the accepted trade-off recorded below, not an unfinished edge.
+
 
 ## What is shared
 

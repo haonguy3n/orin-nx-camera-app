@@ -212,11 +212,22 @@ base::Expected<std::unique_ptr<FfsGadget>, std::string> FfsGadget::create() {
 }
 
 FfsGadget::~FfsGadget() {
-    // Closing ep0 removes the FunctionFS function, which tears the interface
-    // down. The UDC stays bound to the base gadget for usb-gadget.service to
-    // manage, matching the pre-refactor teardown.
+    // Closing ep0 makes the FunctionFS function unready while its symlink is
+    // still in the active config, so the kernel unbinds the WHOLE gadget --
+    // taking CDC-NCM, and any ssh session over 192.168.55.x, with it. An
+    // earlier comment here claimed the UDC stayed bound to the base gadget;
+    // it does not, and that cost three lost connections before it was
+    // understood.
+    //
+    // FunctionFS cannot simply live in an always-bound gadget instead: a
+    // config containing ffs will not bind until userspace has written
+    // descriptors to ep0, so usb-gadget.service cannot own it outright. What
+    // it CAN do is not leave the gadget unbound afterwards -- remove the
+    // function and rebind, so NCM/ACM come back within moments of the service
+    // stopping rather than staying down until a restart or reboot.
     if (ep0_ >= 0)
         close(ep0_);
+    release_base_gadget();
 }
 
 }  // namespace camera::secure
