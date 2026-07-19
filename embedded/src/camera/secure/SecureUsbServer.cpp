@@ -102,106 +102,11 @@ bool endpoint_write_all(int fd, const uint8_t* bytes, size_t length,
     return true;
 }
 
-// Video is pulled in-process rather than by forking gst-launch.
-//
-// Two reasons. A missing gst-launch-1.0 binary fails as _exit(127), which is
-// indistinguishable from a pipeline that runs and produces nothing -- and
-// camera-streamer already links GStreamer, so the dependency was avoidable.
-// Second, the child built its argv *after* fork(): allocating in the child of
-// a multi-threaded process deadlocks if any other thread held the malloc lock
-// at fork time, which would hang the reader thread forever.
-struct Pipeline {
-    GstElement* element = nullptr;
-    GstAppSink* sink = nullptr;
-    GstAppSink* detect = nullptr;  // optional raw-BGR branch for face detection
-    GstElement* camsrc = nullptr;  // live source, for runtime properties
-
-    ~Pipeline() {
-        if (camsrc) gst_object_unref(camsrc);
-        if (element) {
-            gst_element_set_state(element, GST_STATE_NULL);
-            gst_object_unref(element);
-        }
-    }
-
-    bool start(const std::string& description, std::string* error) {
-        GError* failure = nullptr;
-        element = gst_parse_launch(description.c_str(), &failure);
-        if (element == nullptr) {
-            *error = failure != nullptr ? failure->message : "unknown parse error";
-            if (failure != nullptr) g_error_free(failure);
-            return false;
-        }
-        // gst_parse_launch can return a pipeline AND a non-fatal error: an
-        // element it could not create, or a property it could not set, with
-        // that part of the graph quietly omitted. Discarding this error is how
-        // a missing detect branch became invisible -- video kept working
-        // because "sink" was still there, while nothing said the detect leg
-        // had been dropped on the floor.
-        if (failure != nullptr) {
-            XLOGF(WARN, "secure-usb: pipeline built with warnings: %s",
-                  failure->message);
-            g_error_free(failure);
-        }
-        GstElement* raw = gst_bin_get_by_name(GST_BIN(element), "sink");
-        if (raw == nullptr) {
-            *error = "pipeline has no appsink";
-            return false;
-        }
-        sink = GST_APP_SINK(raw);
-        // The detection branch is optional -- only present when the launch
-        // string carries a "detect" appsink (detection enabled).
-        if (GstElement* d = gst_bin_get_by_name(GST_BIN(element), "detect"))
-            detect = GST_APP_SINK(d);
-        // Named "camsrc" by the source builders; absent on the RTSP re-serve
-        // fallback, where there is no local source to poke.
-        camsrc = gst_bin_get_by_name(GST_BIN(element), "camsrc");
-        if (gst_element_set_state(element, GST_STATE_PLAYING) ==
-            GST_STATE_CHANGE_FAILURE) {
-            *error = "pipeline refused to start";
-            return false;
-        }
-        // set_state returns ASYNC for a live source, so "no failure" does not
-        // mean running. Wait for the state to settle: a branch that never
-        // prerolls leaves the pipeline in PAUSED, which is indistinguishable
-        // from a camera producing nothing -- except it also makes teardown
-        // hang. Say so instead of stalling silently. 10s covers Argus startup.
-        // Judge by the state reached, not the return code: a live source can
-        // report NO_PREROLL while genuinely running, and failing on that would
-        // break a working pipeline.
-        GstState state = GST_STATE_NULL;
-        gst_element_get_state(element, &state, nullptr, 10 * GST_SECOND);
-        if (state != GST_STATE_PLAYING) {
-            *error = "pipeline did not reach PLAYING (stuck in " +
-                     std::string(gst_element_state_get_name(state)) +
-                     "); a branch is not prerolling";
-            return false;
-        }
-        return true;
-    }
-
-    // Reports a pipeline error once, so a mount that never negotiates says so
-    // instead of looking like a camera that produces nothing.
-    void drain_bus(uint8_t camera) {
-        GstBus* bus = gst_element_get_bus(element);
-        if (bus == nullptr) return;
-        while (GstMessage* message = gst_bus_pop_filtered(
-                   bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS))) {
-            if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ERROR) {
-                GError* failure = nullptr;
-                gchar* debug = nullptr;
-                gst_message_parse_error(message, &failure, &debug);
-                XLOGF(WARN, "secure-usb: cam%u pipeline error: %s",
-                      static_cast<unsigned>(camera),
-                      failure != nullptr ? failure->message : "unknown");
-                if (failure != nullptr) g_error_free(failure);
-                g_free(debug);
-            }
-            gst_message_unref(message);
-        }
-        gst_object_unref(bus);
-    }
-};
+// Video is pulled in-process rather than by forking gst-launch: a missing
+// gst-launch-1.0 fails as _exit(127), indistinguishable from a pipeline that
+// runs and produces nothing, and building argv after fork() in a
+// multi-threaded process can deadlock on the malloc lock. The pipeline itself
+// now lives in media::CameraPipeline, shared with every other transport.
 
 // The single thread that writes to the endpoint. Several producers -- two
 // video pipelines and the control/update tunnel -- enqueue records; this
@@ -563,77 +468,50 @@ private:
     size_t reported_ = 0;
 };
 
-// Pulls raw BGR frames from the pipeline's optional detection branch, runs the
-// face detector, and pushes the boxes over Channel::Meta. Runs on its own
-// thread so inference never blocks the video path; boxes are droppable.
-void detection_loop(Session& session, uint8_t camera, GstAppSink* detect,
-                    detect::IFaceDetector& detector,
-                    const std::atomic<bool>& stop, int detect_fps) {
-    // Pace the pulls. The appsink blocks rather than dropping (drop=false), so
-    // not pulling is what stops nvvidconv converting -- the wait below is the
-    // thing that actually keeps VIC and the GPU idle between detections.
-    const auto interval = detect_fps > 0
-                              ? std::chrono::milliseconds(1000 / detect_fps)
-                              : std::chrono::milliseconds(0);
-    auto next = std::chrono::steady_clock::now();
-    while (!session.dead && !stop) {
-        if (interval.count() > 0) {
-            next += interval;
-            const auto now = std::chrono::steady_clock::now();
-            if (now < next) {
-                std::this_thread::sleep_for(next - now);
-            } else {
-                next = now;  // fell behind; do not accumulate a burst debt
-            }
-            if (session.dead || stop) break;
+// Raw frames -> detector -> boxes on Channel::Meta. Driven by pump_raw() on a
+// dedicated thread, because inference (~25 ms) must never sit in front of the
+// video pull (~16 ms/frame).
+class DetectSink : public media::IFrameTransport {
+public:
+    DetectSink(Session& session, uint8_t camera, detect::IFaceDetector& detector)
+        : session_(session), camera_(camera), detector_(detector) {}
+
+    void on_frame(uint8_t, const media::Frame&) override {}  // video is not ours
+
+    void on_raw(uint8_t camera, const uint8_t* bgrx, int width, int height,
+                int stride) override {
+        const auto boxes = detector_.detect(bgrx, width, height, stride);
+        // Serve a pending ISP snapshot from this same frame: Argus allows one
+        // consumer per camera, so nothing outside this process can open the
+        // sensor while the service runs.
+        if (const std::string path = detect::take_snapshot_request(camera);
+            !path.empty()) {
+            const std::string failure =
+                detect::write_bgr_ppm(path, bgrx, width, height, stride,
+                                      /*bytes_per_pixel=*/4, boxes);
+            if (failure.empty())
+                XLOGF(INFO, "secure-usb: cam%u snapshot written to %s "
+                            "(%zu face(s) in this frame)",
+                      static_cast<unsigned>(camera), path.c_str(), boxes.size());
+            else
+                XLOGF(WARN, "secure-usb: cam%u snapshot failed: %s",
+                      static_cast<unsigned>(camera), failure.c_str());
         }
-        GstSample* sample = gst_app_sink_try_pull_sample(detect, 200 * GST_MSECOND);
-        if (sample == nullptr) continue;
-        int w = 0, h = 0;
-        if (GstCaps* caps = gst_sample_get_caps(sample)) {
-            const GstStructure* s = gst_caps_get_structure(caps, 0);
-            gst_structure_get_int(s, "width", &w);
-            gst_structure_get_int(s, "height", &h);
-        }
-        GstBuffer* buffer = gst_sample_get_buffer(sample);
-        GstMapInfo map;
-        if (w > 0 && h > 0 && buffer != nullptr
-            && gst_buffer_map(buffer, &map, GST_MAP_READ)) {
-            const int stride = static_cast<int>(map.size) / h;
-            const auto boxes = detector.detect(map.data, w, h, stride);
-            // Serve a pending ISP snapshot from this same frame. Done here
-            // because Argus allows one consumer per camera: nothing outside
-            // this process can open the sensor while the service runs, and
-            // stopping the service to free it would unbind the USB gadget.
-            if (const std::string path =
-                    detect::take_snapshot_request(camera);
-                !path.empty()) {
-                const std::string failure =
-                    detect::write_bgr_ppm(path, map.data, w, h, stride,
-                                          /*bytes_per_pixel=*/4, boxes);
-                if (failure.empty())
-                    XLOGF(INFO,
-                          "secure-usb: cam%u snapshot written to %s "
-                          "(%zu face(s) in this frame)",
-                          static_cast<unsigned>(camera), path.c_str(),
-                          boxes.size());
-                else
-                    XLOGF(WARN, "secure-usb: cam%u snapshot failed: %s",
-                          static_cast<unsigned>(camera), failure.c_str());
-            }
-            gst_buffer_unmap(buffer, &map);
-            const std::string json = detect::to_meta_json(camera, w, h, boxes);
-            session.enqueue(Channel::Meta, camera,
-                            reinterpret_cast<const uint8_t*>(json.data()),
-                            json.size(), /*droppable=*/true);
-        }
-        gst_sample_unref(sample);
+        const std::string json = detect::to_meta_json(camera, width, height, boxes);
+        session_.enqueue(Channel::Meta, camera,
+                         reinterpret_cast<const uint8_t*>(json.data()),
+                         json.size(), /*droppable=*/true);
     }
-}
+
+private:
+    Session& session_;
+    uint8_t camera_;
+    detect::IFaceDetector& detector_;
+};
 
 // Pulls one camera's encoded H.265 elementary stream and pushes it over the
 // session. When `detect_model` is set the pipeline also carries a raw branch,
-// and a detection_loop thread runs face detection alongside.
+// and a DetectSink pumps it on its own thread.
 void video_loop(Session& session, uint8_t camera,
                 const std::function<std::string()>& describe,
                 const std::atomic<bool>& enabled, const std::string& detect_model,
@@ -670,15 +548,22 @@ void video_loop(Session& session, uint8_t camera,
         // any setting the live element cannot take).
         const std::string description = describe();
         relaunch = false;
-        Pipeline pipeline;
-        std::string error;
+        media::CameraPipeline pipeline(camera, description);
         bool produced = false;
-        if (!pipeline.start(description, &error)) {
+        if (auto started = pipeline.start(); !started.hasValue()) {
             XLOGF(WARN, "secure-usb: cam%u pipeline did not start: %s",
-                  static_cast<unsigned>(camera), error.c_str());
+                  static_cast<unsigned>(camera), started.error().c_str());
         } else {
+            // Declared before the detection thread on purpose. pump_raw() fans
+            // out to EVERY registered transport, so a sink must outlive that
+            // thread; declaring it later would let it be destroyed while the
+            // detector is still pumping, and the thread would call into freed
+            // memory. Reverse destruction order gives the guarantee for free.
+            VideoSink video_sink(session, camera, report);
+            pipeline.add_transport(&video_sink);
+
             // Detection runs alongside the video pull, on the raw branch, for
-            // this pipeline's lifetime. Joined before ~Pipeline tears the
+            // this pipeline's lifetime. Joined before the pipeline tears the
             // branch down.
             std::atomic<bool> detect_stop{false};
             std::thread detect_thread;
@@ -690,15 +575,28 @@ void video_loop(Session& session, uint8_t camera,
             if (detector == nullptr)
                 XLOGF(WARN, "secure-usb: cam%u no detector; detection off",
                       static_cast<unsigned>(camera));
-            else if (pipeline.detect == nullptr)
+            else if (!pipeline.has_detect_branch())
                 XLOGF(WARN,
                       "secure-usb: cam%u pipeline has no 'detect' appsink; "
                       "detection off (launch: %s)",
                       static_cast<unsigned>(camera), description.c_str());
-            if (detector && pipeline.detect != nullptr) {
-                detect_thread = std::thread([&] {
-                    detection_loop(session, camera, pipeline.detect, *detector,
-                                   detect_stop, detect_fps);
+            // Detection pumps the raw branch on its own thread: inference must
+            // never sit in front of the video pull.
+            std::unique_ptr<DetectSink> detect_sink;
+            if (detector && pipeline.has_detect_branch()) {
+                detect_sink =
+                    std::make_unique<DetectSink>(session, camera, *detector);
+                pipeline.add_transport(detect_sink.get());
+                const int interval = detect_fps > 0 ? 1000 / detect_fps : 0;
+                detect_thread = std::thread([&pipeline, &detect_stop, &session,
+                                             interval] {
+                    while (!session.dead && !detect_stop) {
+                        if (interval > 0)
+                            std::this_thread::sleep_for(
+                                std::chrono::milliseconds(interval));
+                        if (session.dead || detect_stop) break;
+                        pipeline.pump_raw(200);
+                    }
                 });
             }
             SCOPE_EXIT {
@@ -707,12 +605,11 @@ void video_loop(Session& session, uint8_t camera,
             };
             // Expose the source while this pipeline lives, so the control
             // server can set exposure/gain on it.
-            publish(camera, pipeline.camsrc);
+            publish(camera, &pipeline);
             SCOPE_EXIT {
                 publish(camera, nullptr);
                 report(camera, false, 0);  // pipeline down: not streaming
             };
-            VideoSink video_sink(session, camera, report);
             while (!session.dead) {
                 // Bounded pull so session teardown is noticed promptly even
                 // when the camera has gone quiet.
@@ -726,30 +623,13 @@ void video_loop(Session& session, uint8_t camera,
                                 "(launch changed)", static_cast<unsigned>(camera));
                     break;  // outer loop re-reads the description
                 }
-                GstSample* sample = gst_app_sink_try_pull_sample(
-                    pipeline.sink, 200 * GST_MSECOND);
-                if (sample == nullptr) {
-                    pipeline.drain_bus(camera);
-                    if (gst_app_sink_is_eos(pipeline.sink)) break;
+                // CameraPipeline pulls and fans out to VideoSink.
+                if (!pipeline.pump(200)) {
+                    pipeline.drain_bus();
+                    if (pipeline.is_eos()) break;
                     continue;
                 }
-                GstBuffer* buffer = gst_sample_get_buffer(sample);
-                GstMapInfo map;
-                if (buffer != nullptr && gst_buffer_map(buffer, &map, GST_MAP_READ)) {
-                    // Same work as before, now behind the transport seam: the
-                    // chunking, accounting and logging live in VideoSink, which
-                    // CameraPipeline will drive directly in the next step.
-                    media::Frame frame;
-                    frame.data = map.data;
-                    frame.size = map.size;
-                    frame.pts = GST_BUFFER_PTS(buffer);
-                    frame.keyframe =
-                        !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT);
-                    video_sink.on_frame(camera, frame);
-                    produced = video_sink.produced();
-                    gst_buffer_unmap(buffer, &map);
-                }
-                gst_sample_unref(sample);
+                produced = video_sink.produced();
                 // VideoSink marks the session dead if sealing failed: the
                 // record nonce is an implicit counter, so a dropped record
                 // desyncs the peer and the session cannot continue.
@@ -845,27 +725,23 @@ SecureUsbServer::CameraStats SecureUsbServer::stats(uint8_t camera) const {
     return out;
 }
 
-void SecureUsbServer::publish_source(uint8_t camera, void* element) {
+void SecureUsbServer::publish_source(uint8_t camera, void* pipeline) {
     if (camera >= kCameras) return;
     std::lock_guard<std::mutex> lock(live_mutex_);
-    if (live_source_[camera] != nullptr)
-        gst_object_unref(static_cast<GstElement*>(live_source_[camera]));
-    // Hold our own ref: the pipeline that owns it can be torn down while the
-    // control server is mid-call.
-    live_source_[camera] =
-        element != nullptr ? gst_object_ref(static_cast<GstElement*>(element))
-                           : nullptr;
+    // A media::CameraPipeline*, not a GstElement: no refcounting, because the
+    // video loop clears this (publishes nullptr) before the pipeline is
+    // destroyed, under the same mutex the control server takes.
+    live_source_[camera] = pipeline;
 }
 
 bool SecureUsbServer::set_source_property(uint8_t camera, const char* property,
                                           const char* value) {
     if (camera >= kCameras) return false;
     std::lock_guard<std::mutex> lock(live_mutex_);
-    auto* src = static_cast<GstElement*>(live_source_[camera]);
-    if (src == nullptr)
+    auto* pipeline = static_cast<media::CameraPipeline*>(live_source_[camera]);
+    if (pipeline == nullptr)
         return false;  // no pipeline up; the launch string carries it instead
-    gst_util_set_object_arg(G_OBJECT(src), property, value);
-    return true;
+    return pipeline->set_source_property(property, value);
 }
 
 void SecureUsbServer::refresh_launch(uint8_t camera, std::string launch) {

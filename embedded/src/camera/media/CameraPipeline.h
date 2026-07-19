@@ -86,6 +86,11 @@ public:
 
     [[nodiscard]] bool has_detect_branch() const { return detect_ != nullptr; }
 
+    // True once the encoded branch has signalled end-of-stream. Distinguishes
+    // "camera went away" from "nothing arrived in this timeout", which decides
+    // whether a caller should rebuild or keep waiting.
+    [[nodiscard]] bool is_eos() const;
+
     // Runtime property on the live source element (argus forwards its range
     // properties while streaming). False when nothing is up.
     bool set_source_property(const char* property, const char* value);

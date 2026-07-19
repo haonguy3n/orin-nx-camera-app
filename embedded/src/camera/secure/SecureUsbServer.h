@@ -108,7 +108,10 @@ private:
     // pipeline is up. Guarded because the control server pokes it from the
     // GLib main thread while the video loop replaces it.
     mutable std::mutex live_mutex_;
-    void* live_source_[2] = {nullptr, nullptr};  // GstElement*, ref held
+    // media::CameraPipeline* for each camera while its loop runs. Not
+    // refcounted: the loop publishes nullptr before the pipeline dies,
+    // under live_mutex_.
+    void* live_source_[2] = {nullptr, nullptr};
     std::atomic<bool> relaunch_[2] = {{false}, {false}};
     // Updated by the video loops, read by the control server.
     std::atomic<bool> streaming_[2] = {{false}, {false}};

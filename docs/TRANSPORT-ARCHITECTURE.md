@@ -62,13 +62,19 @@ IMX296 -> Argus/ISP -> CameraPipeline (one per sensor)
   its hazard: that request would tear down the very channel its reply must
   return on, and since usb mode binds no socket, a failed switch leaves only
   the serial console.
-- **RTSP disappears**, and with it the `pay0` constraint, per-client media
-  lifecycle, the unused 8554 listener and the IStreamController tangle.
+- **RTSP is kept** as a separate, optional network path (decision 2026-07-19).
+  It is not part of this stack: it stays a plain RTSP server for interop with
+  VLC, ffmpeg and NVRs, and for a future network mode that does not need the
+  encrypted record protocol. It carries no detection metadata, because that
+  rides the Meta channel which only exists inside a session.
 
 ## Trade-offs and open points
 
-1. **RTSP interop is lost.** Nothing external (VLC, ffmpeg, an NVR) can consume
-   the stream any more. Decide before removing it.
+1. **RTSP is retained for interop.** Kept deliberately so VLC/ffmpeg/NVR
+   clients still work and a future network mode has a plain option. It stands
+   beside this stack rather than inside it: no encryption, and no detection
+   metadata, since Meta only exists within a session. Two network paths is the
+   accepted cost.
 2. **Discovery stays outside the session.** Over TCP the host needs an address
    first; the UDP responder covers that and is unencrypted by nature.
 3. **Auth over a real network.** The CSU handshake pins the device certificate.

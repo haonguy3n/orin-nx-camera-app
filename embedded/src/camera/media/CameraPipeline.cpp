@@ -171,6 +171,10 @@ bool CameraPipeline::pump(int timeout_ms) {
     return true;
 }
 
+bool CameraPipeline::is_eos() const {
+    return sink_ != nullptr && gst_app_sink_is_eos(sink_) == TRUE;
+}
+
 bool CameraPipeline::set_source_property(const char* property,
                                          const char* value) {
     if (source_ == nullptr) return false;
