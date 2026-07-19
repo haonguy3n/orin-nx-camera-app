@@ -35,6 +35,7 @@ add_executable(camera-streamer
     # lib (low-level device/system access)
     src/camera/lib/net/NetworkResolver.cpp
     src/camera/lib/v4l2/V4l2Device.cpp
+    src/camera/lib/sys/ResourceMonitor.cpp
     # folly mimics with .cpp implementations (GLib-backed)
     src/camera/base/io/async/AsyncServerSocket.cpp
     src/camera/base/io/async/SSLContext.cpp
@@ -63,6 +64,7 @@ add_executable(camera-streamer
     src/camera/control/handlers/IspHandler.cpp
     src/camera/control/handlers/ZoomHandler.cpp
     src/camera/control/handlers/V4l2ControlHandler.cpp
+    src/camera/control/handlers/MetricsHandler.cpp
     src/camera/control/handlers/UpdateHandler.cpp
     # discovery
     src/camera/discovery/DiscoveryServer.cpp

@@ -2,6 +2,7 @@
 
 #include "camera/control/handlers/ExposureHandler.h"
 #include "camera/control/handlers/IspHandler.h"
+#include "camera/control/handlers/MetricsHandler.h"
 #include "camera/control/handlers/StatusHandler.h"
 #if ENABLE_SECURE_USB
 #include "camera/control/handlers/SnapshotHandler.h"
@@ -32,6 +33,7 @@ void register_all_handlers(ControlRegistry& registry) {
     registry.register_handler(std::make_unique<GetControlHandler>());
     registry.register_handler(std::make_unique<SetControlHandler>());
     registry.register_handler(std::make_unique<GetUpdateStatusHandler>());
+    registry.register_handler(std::make_unique<GetMetricsHandler>());
 #if ENABLE_SECURE_USB
     // Snapshot reads from the detection branch, which the secure USB
     // pipeline owns; without that transport there is no frame to grab.
