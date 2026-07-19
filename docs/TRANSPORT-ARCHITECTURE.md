@@ -1,16 +1,17 @@
-# Transport architecture — one secure protocol, two carriers
+# Transport architecture — two modes
 
-Status: **agreed design, not yet implemented** (2026-07-19). Recorded here so
-the refactor has a target; see "Migration" for what exists today.
+Status: **implemented and verified on hardware** (2026-07-19).
 
-## The idea
+The device serves video over exactly one transport at a time, chosen by
+`transports` in `camera-streamer.conf`. There are two, and no others:
 
-Encryption and multiplexing sit **above** the transport. USB and network carry
-the *same* encrypted record protocol, so everything above the split — session,
-crypto, channel mux, detection, the host demux and renderer — is written once.
-Only the carrier differs.
+| mode | video | detection boxes | encrypted |
+|---|---|---|---|
+| `usb` | `Channel::Video` | `Channel::Meta` | yes |
+| `network` | RTSP / RTP | control `{"event":"faces"}` | **no** |
 
-Network mode is therefore **CSU records over TCP, not RTSP.**
+Anything else — `both`, or an encrypted record protocol over TCP — is
+deliberately not supported. See "Rejected" below.
 
 ```
 IMX296 -> Argus/ISP -> CameraPipeline (one per sensor)
@@ -19,133 +20,89 @@ IMX296 -> Argus/ISP -> CameraPipeline (one per sensor)
                         |                   |
                    DETECTION             VIDEO
                    YuNet/CUDA           H.265 encode
-                        |  boxes (JSON)     |  access units
-  ======================+===================+=====================
-             SESSION / MUX -- channels: Video | Control | Update | Meta
-  ======================+===================+=====================
-             ENCRYPT  (ECDHE-P256 handshake, ChaCha20-Poly1305 records)
-  ======================+===================+=====================
-                        TRANSPORT (strategy)
-                  +-----+------+      +-----+------+
-                  | USB        |      | NETWORK    |
-                  | ep1/ep2    |      | TCP socket |
-                  +-----+------+      +-----+------+
-  ============================ the wire =========================
-                  +-----+------+      +-----+------+
-                  | USB libusb |      | TCP client |
-                  +-----+------+      +-----+------+
-             DECRYPT  (same handshake, same records)
-                        DEMUX
-              Video    Meta    Control    Update
-                |        |        |          |
-             decoder     |     control    .swu push
-                +---+----+
-                    |
-                FrameView  (frame + boxes in one paint)   HOST UI
+                        |                   |
+        ================+===================+================
+          usb mode                     network mode
+        ----------------------------   ----------------------------
+          SESSION / MUX                  RTSP media (gst-rtsp-server)
+          Video|Control|Update|Meta      + detect appsink beside pay0
+          ENCRYPT (ChaCha20-Poly1305)    boxes -> ControlServer::broadcast
+          ep1/ep2 bulk                   RTP + control TCP
+        ================+===================+================
+                        |                   |
+                    DECRYPT             ControlClient event
+                        |                   |
+                        +--------+----------+
+                                 |
+                          applyFaceMeta -> FrameView
+                              (one renderer, both modes)
 ```
 
-## Why this shape
+## What is shared
 
-- **One protocol, two carriers.** Only the carrier differs (~100 lines each).
-  Everything else is shared by construction rather than by discipline.
-- **Detection works in every mode, for free.** It sits above the split, so it
-  is no longer mode-dependent. No separate metadata delivery per transport.
-- **Video is encrypted on the network path.** RTSP never was; TLS covered only
-  control and update.
-- **Argus contention disappears.** One CameraPipeline per sensor feeds every
-  transport, so no transport opens the sensor itself. This is what killed the
-  old `transports=both`, which propped the USB side up by re-serving the
-  camera's own RTSP mount over loopback — costing an RTP round trip and
-  silently disabling face detection.
-- **Transport choice becomes host-side only.** Both carriers can be live at
-  once, so the host just picks. No `set-transport` control method, and none of
-  its hazard: that request would tear down the very channel its reply must
-  return on, and since usb mode binds no socket, a failed switch leaves only
-  the serial console.
-- **RTSP is kept** as a separate, optional network path (decision 2026-07-19).
-  It stays a plain RTSP server for interop with VLC, ffmpeg and NVRs. It DOES
-  carry face detection: the mount's launch string grows a detect branch beside
-  pay0, MountController picks the appsink up on media-configure, and boxes are
-  pushed to control clients as `{"event":"faces",...}` events. The payload is
-  the same to_meta_json the Meta channel carries, so the host renders both
-  transports with identical code.
+Everything above the transport split:
 
-## Trade-offs and open points
+- `CameraPipeline` — one per sensor, owning pipeline lifecycle, PLAYING
+  verification, the live source element, relaunch and frame fanout. Argus
+  permits a single consumer per camera, so nothing else opens the sensor.
+- The detector, and `detect::to_meta_json` — byte-identical payloads on both
+  modes.
+- `IMetaSink` — the only thing that differs about detection delivery.
+  `SessionMetaSink` enqueues on `Channel::Meta`; `ControlMetaSink` broadcasts a
+  control event.
+- Host: `applyFaceMeta` -> `FrameView`, which paints frame and boxes in one
+  pass. Neither mode has its own renderer.
 
-1. **RTSP is retained for interop**, and now carries detection too (boxes via
-   control events rather than the Meta channel). What it still does NOT get is
-   encryption: RTSP video is in the clear, where the record protocol is not.
-   Two network paths is the accepted cost.
-2. **The control protocol is no longer strictly request/response.** A line
-   without an "id" is a server-initiated event. Any client assuming every line
-   is a reply needs updating -- the bundled viewer already does.
-3. **Discovery stays outside the session.** Over TCP the host needs an address
-   first; the UDP responder covers that and is unencrypted by nature.
-4. **Auth over a real network.** The CSU handshake pins the device certificate.
-   On an untrusted network the CA-signed device cert path should probably be
-   mandatory rather than optional.
-5. **The USB gadget coupling is separate and still real.** CDC-NCM only exists
-   while the composite gadget is bound, and that binding depends on
-   camera-streamer owning FunctionFS. That is why stopping the service drops
-   ssh, and why switching to network mode once left the device unreachable
-   (fixed in 7f5756f). Moving all three functions into usb-gadget.service is
-   the proper decoupling and is independent of this design.
+## What differs
 
-## What is actually built (2026-07-19)
+Only the carrier, and confidentiality:
 
-The drawn design puts encrypt/decrypt above BOTH carriers. That is true of the
-USB carrier and NOT yet true of the network one, because RTSP was kept for
-interop. Today there are two network shapes, and only one of them matches the
-diagram:
+- **usb** binds no TCP/UDP socket at all except the NCM recovery listener on
+  `192.168.55.1:8557`. Control is dispatched in-process and firmware upload
+  rides an anonymous socketpair, so nothing is re-serialised onto loopback.
+- **network** binds RTSP, control, discovery and update normally, and video is
+  in the clear.
 
-| | video | detection boxes | encrypted |
-|---|---|---|---|
-| USB (built) | Channel::Video | Channel::Meta | yes |
-| Network, RTSP (built) | RTP | control `{"event":"faces"}` | **no** |
-| Network, CSU-over-TCP (not built) | Channel::Video | Channel::Meta | yes |
+## Accepted trade-off
 
-Detection now works on every built path, and the host renders both with the
-same `applyFaceMeta` -> `FrameView` code. What differs is the carrier and
-whether video is encrypted.
+**Network mode does not encrypt video.** RTSP is kept for interop with VLC,
+ffmpeg and NVRs, and that is incompatible with wrapping the stream in the
+record protocol. A deployment that needs confidentiality on the wire uses usb
+mode. This is a decision, not an oversight: do not "fix" it by adding a second
+network path.
 
-Keeping RTSP was a deliberate call (interop with VLC/ffmpeg/NVRs). It does not
-have to be exclusive: TcpTransport can be added ALONGSIDE it, so a deployment
-picks interop or confidentiality. The diagram is the target for the secure
-path, not an argument for deleting the plain one.
+Note also that the control connection is no longer strictly
+request/response — a line with no `"id"` is a server-initiated event. Any
+client that assumes every line is a reply needs updating; the bundled viewer
+handles it.
 
-**Remaining to match the diagram fully:**
+## Rejected
 
-1. `TcpTransport` on the device -- the existing session, handshake, crypto and
-   channel mux over a TCP socket instead of ep1/ep2. This is the last piece of
-   genuinely new device code, and it is small: everything above the carrier is
-   already transport-agnostic since CameraPipeline landed.
-2. Host: split `SecureUsbBridge` so session/crypto/demux is shared, with libusb
-   and TCP as interchangeable carriers underneath. Today that logic is welded
-   to libusb.
+- **`transports=both`.** Argus permits one consumer per camera, so serving RTSP
+  and secure USB together meant the USB side re-serving the camera's own RTSP
+  mount over loopback: an RTP round trip, and a re-serve string with no detect
+  branch, which silently disabled face detection. Removed; the value is
+  rejected at config load.
+- **An encrypted record protocol over TCP (`TcpTransport`).** It would have
+  given network mode confidentiality and a single protocol for both carriers,
+  but it duplicates what usb mode already provides and adds a third shape to
+  maintain. Two modes, clearly separated, was chosen instead.
+- **`set-transport` (switching mode at runtime).** The request arrives on the
+  transport being torn down, so its reply can never return; and since usb mode
+  binds nothing, a failed switch leaves only the serial console. Mode is a
+  config decision applied at startup.
 
-Neither is required for detection or for either mode to work; they are what
-make the network path *encrypted* and collapse the two shapes into one.
+## Per-mode notes
 
-## Migration
-
-Already in place:
-
-- `CameraPipeline` + `IFrameTransport` — the shared capture half, with pipeline
-  lifecycle, PLAYING verification, live source properties, relaunch and frame
-  fanout. Has no callers yet.
-- The record protocol, handshake, channel mux and host demux — currently
-  reachable only through the USB path.
-- `FrameView` on the host draws frames and boxes in one pass.
-
-Remaining, in dependency order:
-
-1. Move `SecureUsbServer`'s capture half onto `CameraPipeline`; it becomes an
-   `IFrameTransport` that encrypts and writes to the endpoint.
-2. Add `TcpTransport`: the same session/crypto/mux over a TCP socket. This is
-   the new carrier, and the smallest piece of genuinely new code.
-3. Host: factor `SecureUsbBridge` so the session/crypto/demux half is shared,
-   with libusb and TCP as interchangeable carriers underneath.
-4. Delete RTSP once (1)–(3) carry every mode, along with `IStreamController`'s
-   RTSP assumptions and the remaining network listeners.
-
-Each step is independently testable on hardware; do not stack them.
+- Detection in **network** mode is per-client: gst-rtsp-server builds the
+  pipeline on connect, so no client means no detection. Usb mode has the same
+  property per session.
+- Detection is paced (`[detect] fps`, default 10) and the detect appsink blocks
+  rather than dropping, so `nvvidconv` only converts frames the detector
+  actually takes. Measured on target: GR3D 36-41% -> 25-28%. VIC (~70%) is the
+  camera/encode path and is unaffected by detection.
+- `videoconvert` is NOT in the device image. Only the `nv*` GStreamer plugin
+  packages are installed, and `gst_parse_launch` answers a missing element with
+  a partial pipeline plus a non-fatal error -- which is how a detect branch was
+  silently dropped while video kept working. `nvvidconv` emits system-memory
+  BGRx directly; the detector drops the padding byte.
