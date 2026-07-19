@@ -38,6 +38,10 @@ add_executable(camera-streamer
     # folly mimics with .cpp implementations (GLib-backed)
     src/camera/base/io/async/AsyncServerSocket.cpp
     src/camera/base/io/async/SSLContext.cpp
+    # media: programmatic GStreamer object model (Element/Bin/Pipeline/Tee)
+    src/camera/media/Element.cpp
+    src/camera/media/Bin.cpp
+    src/camera/media/Pipeline.cpp
     # pipeline
     src/camera/pipeline/PipelineBuilder.cpp
     src/camera/pipeline/ArgusSource.cpp
