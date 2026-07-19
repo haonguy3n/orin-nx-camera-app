@@ -91,6 +91,41 @@ IMX296 -> Argus/ISP -> CameraPipeline (one per sensor)
    (fixed in 7f5756f). Moving all three functions into usb-gadget.service is
    the proper decoupling and is independent of this design.
 
+## What is actually built (2026-07-19)
+
+The drawn design puts encrypt/decrypt above BOTH carriers. That is true of the
+USB carrier and NOT yet true of the network one, because RTSP was kept for
+interop. Today there are two network shapes, and only one of them matches the
+diagram:
+
+| | video | detection boxes | encrypted |
+|---|---|---|---|
+| USB (built) | Channel::Video | Channel::Meta | yes |
+| Network, RTSP (built) | RTP | control `{"event":"faces"}` | **no** |
+| Network, CSU-over-TCP (not built) | Channel::Video | Channel::Meta | yes |
+
+Detection now works on every built path, and the host renders both with the
+same `applyFaceMeta` -> `FrameView` code. What differs is the carrier and
+whether video is encrypted.
+
+Keeping RTSP was a deliberate call (interop with VLC/ffmpeg/NVRs). It does not
+have to be exclusive: TcpTransport can be added ALONGSIDE it, so a deployment
+picks interop or confidentiality. The diagram is the target for the secure
+path, not an argument for deleting the plain one.
+
+**Remaining to match the diagram fully:**
+
+1. `TcpTransport` on the device -- the existing session, handshake, crypto and
+   channel mux over a TCP socket instead of ep1/ep2. This is the last piece of
+   genuinely new device code, and it is small: everything above the carrier is
+   already transport-agnostic since CameraPipeline landed.
+2. Host: split `SecureUsbBridge` so session/crypto/demux is shared, with libusb
+   and TCP as interchangeable carriers underneath. Today that logic is welded
+   to libusb.
+
+Neither is required for detection or for either mode to work; they are what
+make the network path *encrypted* and collapse the two shapes into one.
+
 ## Migration
 
 Already in place:
