@@ -125,28 +125,31 @@ Application::Application(std::string conf_path)
 }
 
 camera::base::Expected<camera::base::Unit, std::string> Application::start_servers() {
-    // transports=usb: the cameras are owned by the secure USB transport,
-    // which taps the encoder directly. No RTSP server, so nothing is
-    // payloaded to RTP and bounced through loopback just to be taken apart
-    // again. Control and update still bind, but only on 127.0.0.1, since the
-    // USB transport reaches them there.
+    // transports=usb: the secure USB transport owns the cameras and taps the
+    // encoder directly, control is dispatched in-process and update rides an
+    // anonymous socketpair. Nothing needs a TCP socket, so nothing is created:
+    // no RTSP server, no control listener, no loopback update listener. The
+    // only listener left is the NCM recovery channel below, which is
+    // deliberate -- it is how firmware gets pushed when the USB transport
+    // itself is broken.
     const bool usb_only = config_.transports == "usb";
-    if (usb_only && config_.listen != "127.0.0.1") {
-        XLOGF(INFO, "transports=usb: cameras served over USB only, "
-                    "control/update on loopback");
-        config_.listen = "127.0.0.1";
-    }
-    rtsp_ = std::make_unique<RtspServer>(config_, *source_factory_);
-    rtsp_->set_stall_handler([]() {
-        // Every camera is dead -- nothing left to serve. Hard exit, no
-        // orderly teardown: dismantling GStreamer around a stalled
-        // pipeline crashed with SIGBUS on target, and systemd restarts
-        // us either way -- a wedged process must not linger.
-        _exit(1);
-    });
-    if (auto r = rtsp_->start(); !r) {
-        rtsp_.reset();
-        return r;
+    if (!usb_only) {
+        rtsp_ = std::make_unique<RtspServer>(config_, *source_factory_);
+        rtsp_->set_stall_handler([]() {
+            // Every camera is dead -- nothing left to serve. Hard exit, no
+            // orderly teardown: dismantling GStreamer around a stalled
+            // pipeline crashed with SIGBUS on target, and systemd restarts
+            // us either way -- a wedged process must not linger.
+            _exit(1);
+        });
+        if (auto r = rtsp_->start(); !r) {
+            rtsp_.reset();
+            return r;
+        }
+    } else {
+        XLOGF(INFO, "transports=usb: served over USB only -- no RTSP, control "
+                    "in-process, update over a socketpair; no TCP listener "
+                    "except the recovery channel");
     }
 
     // Runtime settings must reach whichever pipeline is actually serving. With
@@ -154,7 +157,7 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
     // RtspServer controller made set-exposure/set-gain/set-zoom no-ops.
 #ifdef ENABLE_SECURE_USB
     stream_controller_ = std::make_unique<UsbAwareStreamController>(
-        *rtsp_, [this] { return secure_usb_.get(); },
+        rtsp_.get(), [this] { return secure_usb_.get(); },
         [this](int cam) {
             return cam >= 0 && cam < Config::kNumCameras
                        ? usb_video_launch(*source_factory_,
@@ -165,6 +168,12 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
     IStreamController& stream_for_handlers =
         stream_controller_ ? *stream_controller_
                            : static_cast<IStreamController&>(*rtsp_);
+    // Without the secure transport compiled in there is no controller, and
+    // usb mode would leave nothing to drive -- that combination is refused at
+    // load rather than crashing on the first control call.
+    if (!stream_controller_ && rtsp_ == nullptr)
+        return camera::base::makeUnexpected(
+            std::string("transports=usb requires the secure USB transport"));
 
     control_context_ = std::make_unique<ControlContext>(ControlContext{
             config_,
@@ -185,7 +194,10 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
             },
     });
 
-    if (config_.control_port > 0) {
+    // In usb mode control arrives on the USB endpoint and is dispatched
+    // in-process, so no listener is created at all -- previously it bound
+    // 127.0.0.1:8555 purely so the transport could talk to itself.
+    if (config_.control_port > 0 && !usb_only) {
         control_ = std::make_unique<ControlServer>(registry_,
                                                     *control_context_);
         if (auto r = control_->start(rtsp_->bound_address(),
@@ -197,7 +209,10 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
         }
     }
 
-    if (config_.discovery_port > 0) {
+    // Discovery answers broadcasts so a host can find the device on the
+    // network. Over USB the host already has it, so in usb mode this would be
+    // the one remaining thing listening on 0.0.0.0 for no reason.
+    if (config_.discovery_port > 0 && !usb_only) {
         discovery_ = std::make_unique<DiscoveryServer>(config_);
         // Discovery is a convenience; a bind failure (port taken) is not
         // worth refusing to stream over.
@@ -208,17 +223,19 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
     }
 
     if (config_.update_port > 0) {
-        // The primary update listener stays on the servers' bound address --
-        // loopback under transports=usb, which is where the secure USB
-        // tunnel delivers Update-channel records. (An earlier version MOVED
-        // this to the NCM address in usb mode, which silently disconnected
-        // the tunnel's update path: its forwards target 127.0.0.1:8557.)
+        // The object is always needed -- the secure transport hands it a
+        // socketpair via adopt_fd() -- but in usb mode it is never bound.
+        // In network mode this binds normally. In usb mode it is left unbound:
+        // Update records are handed to it over an anonymous socketpair, so
+        // there is nothing for a listener to accept.
         update_server_ = std::make_unique<UpdateServer>(swupdate_, config_);
-        if (auto r = update_server_->start(rtsp_->bound_address(),
-                                           config_.update_port);
-            !r) {
-            XLOGF(WARN, "%s", r.error().c_str());
-            update_server_.reset();  // non-fatal: streaming still works
+        if (!usb_only) {
+            if (auto r = update_server_->start(rtsp_->bound_address(),
+                                               config_.update_port);
+                !r) {
+                XLOGF(WARN, "%s", r.error().c_str());
+                update_server_.reset();  // non-fatal: streaming still works
+            }
         }
         // Recovery path, in ADDITION: with transports=usb everything else is
         // on loopback, so a secure transport that fails to come up would

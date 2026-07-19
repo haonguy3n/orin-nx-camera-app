@@ -27,7 +27,9 @@ public:
     // `usb` is read through a getter because the secure server is constructed
     // after the control server; `build_launch` regenerates one camera's USB
     // launch description from the (already mutated) config.
-    UsbAwareStreamController(IStreamController& rtsp,
+    // `rtsp` may be null: under transports=usb no RTSP server is constructed
+    // at all, and the USB pipeline is the only thing to drive.
+    UsbAwareStreamController(IStreamController* rtsp,
                              std::function<secure::SecureUsbServer*()> usb,
                              std::function<std::string(int)> build_launch)
         : rtsp_(rtsp), usb_(std::move(usb)),
@@ -37,18 +39,25 @@ public:
     // liveness through get-status is a separate change -- under transports=usb
     // these read as a permanently idle server.
     const std::string& bound_address() const override {
-        return rtsp_.bound_address();
+        static const std::string kNone;
+        return rtsp_ != nullptr ? rtsp_->bound_address() : kNone;
     }
-    int client_count() const override { return rtsp_.client_count(); }
+    int client_count() const override {
+        return rtsp_ != nullptr ? rtsp_->client_count() : 0;
+    }
     StreamStatus stream_status(int cam) override {
-        return rtsp_.stream_status(cam);
+        // Without RTSP this reports an empty status rather than a wrong one.
+        // Sourcing it from the USB transport's own frame counters is the
+        // remaining piece -- see the get-status gap.
+        return rtsp_ != nullptr ? rtsp_->stream_status(cam) : StreamStatus{};
     }
 
     // True if either transport took it. The RTSP side is asked first so
     // transports=both keeps its existing behaviour exactly.
     bool set_source_property(int cam, const char* property,
                              const char* value) override {
-        const bool on_rtsp = rtsp_.set_source_property(cam, property, value);
+        const bool on_rtsp =
+            rtsp_ != nullptr && rtsp_->set_source_property(cam, property, value);
         bool on_usb = false;
         if (auto* server = usb_ ? usb_() : nullptr)
             on_usb = server->set_source_property(static_cast<uint8_t>(cam),
@@ -57,7 +66,7 @@ public:
     }
 
     void refresh_launch(int cam) override {
-        rtsp_.refresh_launch(cam);
+        if (rtsp_ != nullptr) rtsp_->refresh_launch(cam);
         auto* server = usb_ ? usb_() : nullptr;
         if (server == nullptr || !build_launch_) return;
         std::string launch = build_launch_(cam);
@@ -66,7 +75,7 @@ public:
     }
 
 private:
-    IStreamController& rtsp_;
+    IStreamController* rtsp_;
     std::function<secure::SecureUsbServer*()> usb_;
     std::function<std::string(int)> build_launch_;
 };
