@@ -42,15 +42,28 @@ repo with `layers: yocto/meta-vc-camera:` and the symlink can go away.
 ## What the layer adds
 
 - `recipes-core/usb-gadget/usb-gadget-init.bb` — configfs composite USB
-  gadget (systemd oneshot `usb-gadget.service`): CDC-NCM network function +
-  ACM serial function, plus dnsmasq config to serve the host its address and
-  a getty on the gadget serial port.
-- `recipes-apps/camera-streamer/camera-streamer.bb` — the C++ RTSP streaming
-  app from `../embedded` (CMake, gstreamer + gst-rtsp-server; runtime deps
-  `glib-networking` + `openssl-bin` for the TLS support). Installs
+  gadget (systemd oneshot `usb-gadget.service`): CDC-NCM network function,
+  ACM serial function, and the `ffs.secure` FunctionFS function for the
+  secure USB transport (the gadget script creates and mounts it;
+  `camera-streamer` owns the endpoint files and binds the gadget), plus
+  dnsmasq config to serve the host its address and a getty on the gadget
+  serial port.
+- `recipes-apps/camera-streamer/camera-streamer.bb` — the C++ camera app
+  from `../embedded` (CMake; gstreamer + gst-rtsp-server + OpenSSL +
+  OpenCV/CUDA for the secure transport and face detection; runtime deps
+  `glib-networking` + `openssl-bin` for network-mode TLS). Installs
   `camera-streamer.service` (systemd watchdog enabled), the first-boot TLS
   certificate generator `camera-streamer-gencert.service`, and
   `/etc/camera-streamer.conf`.
+- `recipes-apps/camera-face-model/` — the YuNet face-detection ONNX model
+  (`/usr/share/camera-streamer/`); shipping the model is what turns
+  detection on.
+- `recipes-apps/camera-device-cert/` — optional CA-signed device
+  certificate: run `scripts/provision-device-cert.sh` and set
+  `CAMERA_DEVICE_CERT_DIR` in local.conf. Left unset the recipe is
+  skipped and the device generates a self-signed cert on first boot
+  (hosts then pin per device instead of trusting the CA).
+- `recipes-core/systemd/` — hardware watchdog config (`10-watchdog.conf`).
 - `recipes-images/camera-image.bb` — `demo-image-base` + NVIDIA GStreamer
   elements (`gstreamer1.0-plugins-nvarguscamerasrc/-nvvidconv/
   -nvvideo4linux2/-nvvideosinks`), `gstreamer1.0-rtsp-server`, `v4l-utils`,
@@ -120,13 +133,18 @@ Plug the devkit's USB-C (device-mode) port into a Linux host:
   gateway/DNS is pushed, so the host keeps its normal uplink).
 - The **device** is at **192.168.55.1**; `ping 192.168.55.1` should work
   within a few seconds of boot.
+- A **vendor interface** (the `ffs.secure` function) that the viewer's
+  secure USB bridge claims via libusb — this carries video/control/update
+  under `transports=usb`. Claiming it needs
+  `host-ui/70-camera-secure-usb.rules` in `/etc/udev/rules.d/`.
 - **RTSP** streams at `rtsp://192.168.55.1:8554/cam0` and `/cam1`
-  (e.g. `ffplay rtsp://192.168.55.1:8554/cam0`).
+  (e.g. `ffplay rtsp://192.168.55.1:8554/cam0`) — only under
+  `transports=network`; the usb default publishes no RTSP.
 - A **serial console** shows up as `/dev/ttyACM0` on the host with a login
   getty (`picocom /dev/ttyACM0` — baud rate irrelevant for ACM).
 
 Device side: gadget is `usb-gadget.service` (oneshot, waits up to 30 s for
 the UDC, restarts on failure), VID:PID `1d6b:0104` (Linux Foundation
-composite), functions `ncm.usb0` (+ static 192.168.55.1/24) and `acm.GS0`
-(getty on `/dev/ttyGS0`). dnsmasq runs DHCP-only (`port=0`) bound to `usb0`
-via `/etc/dnsmasq.d/usb0.conf`.
+composite), functions `ncm.usb0` (+ static 192.168.55.1/24), `acm.GS0`
+(getty on `/dev/ttyGS0`) and `ffs.secure`. dnsmasq runs DHCP-only
+(`port=0`) bound to `usb0` via `/etc/dnsmasq.d/usb0.conf`.

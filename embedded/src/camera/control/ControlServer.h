@@ -1,4 +1,4 @@
-// TCP control server implementing proto/PROTOCOL.md: newline-delimited JSON
+// TCP control server implementing docs/PROTOCOL.md: newline-delimited JSON
 // request/response. Handles only the transport and JSON-RPC envelope; all
 // method logic is delegated to IControlHandler instances via ControlRegistry.
 #pragma once
@@ -39,7 +39,7 @@ public:
     //
     // This makes the protocol no longer strictly request/response. Events
     // carry no "id", which is how a client tells them from a reply -- see
-    // proto/PROTOCOL.md. Must be called on the GLib main loop.
+    // docs/PROTOCOL.md. Must be called on the GLib main loop.
     void broadcast(const std::string& line);
 
     ControlServer(ControlRegistry& registry, ControlContext context);

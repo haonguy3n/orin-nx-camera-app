@@ -1,6 +1,6 @@
 // Control handler interface (Command pattern) and context.
 //
-// Each control protocol method (proto/PROTOCOL.md) is implemented as a
+// Each control protocol method (docs/PROTOCOL.md) is implemented as a
 // separate IControlHandler class. The ControlRegistry maps method names
 // to handler instances, replacing the original 370-line dispatch() if-else
 // chain. This satisfies OCP (new method = new handler class + register

@@ -7,7 +7,7 @@
 class QTimer;
 class QUdpSocket;
 
-// UDP device discovery (see ../proto/PROTOCOL.md "Discovery"): broadcast
+// UDP device discovery (see docs/PROTOCOL.md "Discovery"): broadcast
 // {"method": "discover"} to port 8556, each device replies with one JSON
 // datagram; the device address is the reply's source address.
 class DiscoveryClient : public QObject

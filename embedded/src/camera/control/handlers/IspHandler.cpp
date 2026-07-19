@@ -12,7 +12,7 @@ namespace camera {
 
 namespace {
 
-// nvarguscamerasrc properties settable via set-isp (proto/PROTOCOL.md).
+// nvarguscamerasrc properties settable via set-isp (docs/PROTOCOL.md).
 // Everything else on the element (sensor-id, ranges, ...) is owned by the
 // launch string / dedicated methods and must not be poked freely.
 const char* const kIspParams[] = {

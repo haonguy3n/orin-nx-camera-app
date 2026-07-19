@@ -1,27 +1,42 @@
 # camera-streamer
 
-RTSP streaming service for the Jetson Orin NX camera device (milestones 1-2,
-see `../DESIGN.md`). Serves one hardware-encoded H.265/H.264 stream per
-camera, plus a TCP control channel for runtime camera settings:
+Camera service for the Jetson Orin NX device (see `DESIGN.md`,
+`TRANSPORT-ARCHITECTURE.md`). Serves one hardware-encoded H.265/H.264
+stream per camera plus control, firmware update and face-detection
+metadata, over **one of two transports** (`[server] transports`):
+
+`transports=usb` (default) — everything is multiplexed into an
+authenticated, encrypted session on the FunctionFS USB endpoints. No
+TCP/UDP socket is bound except the recovery `.swu` listener:
 
 ```
-rtsp://192.168.55.1:8554/cam0
-rtsp://192.168.55.1:8554/cam1
-tcp://192.168.55.1:8555        (control protocol, ../proto/PROTOCOL.md)
-udp  192.168.55.1:8556         (discovery responder)
-tcp://192.168.55.1:8557        (OTA .swu upload -> swupdate)
+usb endpoints ep1/ep2          video + control + update + detection boxes
+tcp://192.168.55.1:8557        recovery .swu upload (the one bound socket)
 ```
 
-The control and update channels can be wrapped in TLS/mTLS — see
-"TLS (secure USB)" below. Port and method constants shared with the host
-UI live in `../common/proto/Protocol.h`.
+`transports=network` — classic RTSP + TCP for interop:
+
+```
+rtsp://<device>:8554/cam0      (and /cam1)
+tcp://<device>:8555            (control protocol, PROTOCOL.md)
+udp  <device>:8556             (discovery responder)
+tcp://<device>:8557            (OTA .swu upload -> swupdate)
+```
+
+In network mode the control and update channels can be wrapped in
+TLS/mTLS — see "TLS (network mode)" below. Port and method constants
+shared with the host UI live in `../common/proto/Protocol.h`.
 
 ## Build
 
-Dependencies: CMake >= 3.16, a C++17 compiler, and dev packages for
+Dependencies: CMake >= 3.16, a C++20 compiler, and dev packages for
 `gstreamer-1.0`, `gstreamer-rtsp-server-1.0` and `json-glib-1.0`
 (Debian/Ubuntu: `libgstreamer1.0-dev libgstrtspserver-1.0-dev
 libjson-glib-dev`; Arch: `gstreamer` `gst-rtsp-server` `json-glib`).
+The secure USB transport and face detection (`ENABLE_SECURE_USB`, on by
+default) additionally need OpenSSL and OpenCV (core/imgproc/objdetect/dnn;
+the CUDA DNN backend on target); `-DENABLE_SECURE_USB=OFF` builds the
+network-only service without them.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -45,16 +60,21 @@ If the file is missing, built-in defaults are used (both cameras enabled,
 Argus sensors 0/1, 1440x1080@60, H.265 @ 8 Mbit/s). A commented default file
 ships in `config/camera-streamer.conf`. All keys:
 
+Keys tagged [network] are ignored under `transports=usb` and vice versa
+(the shipped config file carries the same tags):
+
 | Section | Key | Default | Meaning |
 |---|---|---|---|
-| `[server]` | `port` | `8554` | RTSP listen port |
-| | `listen` | `all` | network to serve on: `all` (USB + ethernet at once), `usb` (usb0 only), `ethernet` (eth0 only), or an explicit IPv4 address / interface name |
-| | `transport` | `tcp` | RTP transport offered: `tcp` (interleaved, firewall-proof), `udp`, or `all` (client picks) |
-| | `control-port` | `8555` | TCP control protocol port, same bind address as RTSP; `0` disables |
-| | `discovery-port` | `8556` | UDP discovery responder (always 0.0.0.0); `0` disables |
-| | `update-port` | `8557` | OTA `.swu` upload server (binary, streamed into swupdate IPC); `0` disables |
-| | `tls-cert` / `tls-key` | unset | PEM certificate + key; setting both enables TLS on the control and update ports. Setting only one, or an unreadable file, is a **fatal startup error** — no silent plaintext fallback |
-| | `tls-ca` | unset | additionally **require** a client certificate signed by this CA (mTLS); only authorized host software can command the device |
+| `[server]` | `transports` | `usb` | which transport carries video/control/update: `usb` (secure USB endpoints, binds no socket but the recovery listener) or `network` (RTSP/TCP). **One at a time** — Argus permits a single consumer per camera; anything else is rejected and treated as `usb` |
+| | `recovery-update` | `true` | [usb] `.swu` upload listener on the CDC-NCM address (`192.168.55.1:<update-port>`) — the way firmware gets pushed when the secure USB transport itself is broken |
+| | `port` | `8554` | [network] RTSP listen port |
+| | `listen` | `all` | [network] network to serve on: `all` (USB + ethernet at once), `usb` (usb0 only), `ethernet` (eth0 only), or an explicit IPv4 address / interface name |
+| | `transport` | `tcp` | [network] RTP transport offered: `tcp` (interleaved, firewall-proof), `udp`, or `all` (client picks) |
+| | `control-port` | `8555` | [network] TCP control protocol port, same bind address as RTSP; `0` disables. Under `transports=usb` control is dispatched in-process, no listener |
+| | `discovery-port` | `8556` | [network] UDP discovery responder (always 0.0.0.0); `0` disables |
+| | `update-port` | `8557` | [both] OTA `.swu` upload port (binary, streamed into swupdate IPC); `0` disables. Normal listener in network mode; recovery-only in usb mode |
+| | `tls-cert` / `tls-key` | unset | [network] PEM certificate + key; setting both enables TLS on the control and update ports. Setting only one, or an unreadable file, is a **fatal startup error** — no silent plaintext fallback. The same cert signs the secure-USB handshake |
+| | `tls-ca` | unset | [network] additionally **require** a client certificate signed by this CA (mTLS); only authorized host software can command the device |
 | `[cam0]`/`[cam1]` | `enabled` | `true` | serve this camera at `/cam0`/`/cam1` |
 | | `source` | `argus` | `argus` (nvarguscamerasrc/ISP), `v4l2` (v4l2src, best-effort in M1), `test` (videotestsrc + software encoder, no hardware needed) |
 | | `sensor-id` | `0` / `1` | argus only: nvarguscamerasrc sensor-id |
@@ -70,25 +90,39 @@ ships in `config/camera-streamer.conf`. All keys:
 | | `isp-<property>` | — | argus only: preset an nvarguscamerasrc ISP property (`isp-wbmode=1`, `isp-saturation=1.2`, …); same whitelist as the protocol's `set-isp` |
 | | `zoom` | `1.0` | digital zoom 1–8× (GPU crop + upscale; 1.0 = converter not in the pipeline) |
 | | `zoom-x` / `zoom-y` | `0.5` | crop center as a fraction of the frame (pan while zoomed) |
+| `[detect]` | `model` | `/usr/share/camera-streamer/face_detection_yunet.onnx` | YuNet ONNX model path. The file's presence **is** the enable switch — no readable model, no detection |
+| | `width` | `320` | detector working width; height follows the camera's aspect ratio (forcing a square squashes faces and YuNet misses them) |
+| | `score` | `0.45` | minimum detection confidence 0..1 |
+| | `fps` | `10` | detections per second, deliberately far below capture rate (measured: pacing to 10 took GR3D 36–41% → 25–28%); `0` = unlimited |
 
 The final GStreamer launch string for every mount is logged at startup —
 useful for reproducing issues with plain `gst-launch-1.0`.
 
-## Control protocol (M2)
+## Control protocol
 
-`../proto/PROTOCOL.md` defines the newline-delimited JSON protocol on port
-8555: `get-status` (per-camera streaming state, frame counters, live AE
-exposure/gain readback, and `last_frame` capture metadata for cross-camera
-sync checks), `set-exposure` / `set-gain` / `set-trigger`, `set-isp`
-(runtime WB/saturation/TNR/EE), `set-zoom` (digital zoom + pan), `set-sync`
-(all cameras to external trigger) / `fire-trigger` (software single
-trigger), generic `list-controls`/`get-control`/`set-control` for
-everything else the VC driver exposes, `reload`, `reboot`, and
-`get-update-status` (swupdate install progress). A UDP responder on
-port 8556 answers `{"method":"discover"}` broadcasts so the host UI can
-find devices, and port 8557 accepts `.swu` firmware uploads (streamed
-straight into swupdate's IPC socket, no temp file — see PROTOCOL.md
-"OTA firmware update"). The TCP side is plain enough to drive by hand:
+`PROTOCOL.md` defines the newline-delimited JSON protocol: `get-status`
+(per-camera streaming state, frame counters, live AE exposure/gain
+readback, and `last_frame` capture metadata for cross-camera sync
+checks), `set-exposure` / `set-gain` / `set-trigger`, `set-isp` (runtime
+WB/saturation/TNR/EE), `set-zoom` (digital zoom + pan), `set-sync` (all
+cameras to external trigger) / `fire-trigger` (software single trigger),
+generic `list-controls`/`get-control`/`set-control` for everything else
+the VC driver exposes, `get-metrics` (CPU/GPU/VIC/NVENC load and
+temperatures), `snapshot` (write a PPM off the detection branch, for ISP
+judgement), `reload`, `reboot`, and `get-update-status` (swupdate
+install progress). In network mode detection boxes are pushed as
+`{"event":"faces",...}` lines on the same connection.
+
+The same requests, byte for byte, travel both transports: a TCP listener
+on port 8555 in network mode, in-process dispatch off the secure USB
+control channel in usb mode (marshalled onto the GLib main loop — the
+handlers mutate config and live pipeline elements).
+
+In network mode a UDP responder on port 8556 answers
+`{"method":"discover"}` broadcasts so the host UI can find devices, and
+port 8557 accepts `.swu` firmware uploads (streamed straight into
+swupdate's IPC socket, no temp file — see PROTOCOL.md "OTA firmware
+update"). The TCP side is plain enough to drive by hand:
 
 ```sh
 printf '{"id":1,"method":"set-exposure","params":{"camera":0,"us":5000}}\n' \
@@ -100,10 +134,13 @@ range on the live pipeline (and seed future pipelines); on the `v4l2` path
 they go straight to the VC driver's V4L2 controls. Hardware trigger modes
 are v4l2-only — Argus owns the sensor timing.
 
-## TLS (secure USB)
+## TLS (network mode)
 
 The channels that *command* the device (control 8555, update 8557) can be
-TLS-wrapped; RTSP and discovery are unaffected. Enable by setting
+TLS-wrapped; RTSP and discovery are unaffected. Irrelevant under
+`transports=usb`, where the whole session is already authenticated and
+encrypted end to end — but the same device certificate signs the secure
+USB handshake, so first-boot generation serves both. Enable by setting
 `tls-cert` + `tls-key` in `[server]`; add `tls-ca` to also require a
 client certificate signed by that CA (mTLS), so only authorized host
 software can control the camera. A self-signed EC P-256 device
@@ -161,9 +198,11 @@ plugin sets (base/good/ugly):
 ffplay rtsp://127.0.0.1:8554/cam0
 ```
 
-## Playing the streams (host side)
+## Playing the streams (host side, network mode)
 
-With the device connected over USB (device IP 192.168.55.1):
+Under `transports=usb` there is no RTSP — the viewer's secure USB bridge
+is the only consumer. With `transports=network` and the device connected
+over USB (device IP 192.168.55.1):
 
 The server offers TCP-interleaved RTP by default (see `transport=`), and
 every client negotiates that automatically; forcing TCP client-side just
@@ -204,8 +243,9 @@ at `src/` (`#include "camera/rtsp/RtspServer.h"`).
 CMakeLists.txt
 src/camera/Main.cpp                Entry point: creates Application, runs it
 src/camera/core/
-  Application.{h,cpp}              Lifecycle, reload, signals, server wiring
-  StreamController.h               IStreamController interface (RTSP abstraction)
+  Application.{h,cpp}              Lifecycle, reload, signals, per-transport wiring
+  StreamController.h               IStreamController interface
+  UsbAwareStreamController.h       Routes runtime settings to whichever transport serves
   Watchdog.{h,cpp}                 systemd READY=1 / WATCHDOG=1 notifications
 src/camera/config/
   Config.h                         Config + CameraConfig structs (DTOs)
@@ -214,6 +254,18 @@ src/camera/lib/
   net/NetworkResolver.{h,cpp}      listen= -> bind-address resolution
   v4l2/V4l2Device.{h,cpp}          IV4l2Device interface + V4l2Device impl (ioctl)
   v4l2/V4l2Factory.h               IV4l2DeviceFactory interface + create function
+  sys/ResourceMonitor.{h,cpp}      CPU/GPU/VIC/NVENC load + temps (get-metrics)
+src/camera/media/
+  Element/Bin/Pipeline.{h,cpp}     Programmatic GStreamer object model
+  CameraPipeline.{h,cpp}           One per sensor: lifecycle, video + raw fanout
+src/camera/secure/
+  SecureUsbServer.{h,cpp}          usb transport: session, channel mux, sinks
+  FfsGadget.{h,cpp}                FunctionFS endpoint lifecycle (ffs.secure)
+  SecureRecord/KeySchedule.{h,cpp} Record layer + HKDF key derivation
+src/camera/detect/
+  FaceDetector.{h,cpp}             YuNet on OpenCV/CUDA + to_meta_json
+  MetaSink.h                       IMetaSink: per-transport box delivery
+  Snapshot.{h,cpp}                 PPM snapshot off the detection branch
 src/camera/pipeline/
   PipelineBuilder.{h,cpp}          GStreamer launch string fragments (shared)
   CameraSource.h                   ICameraSource interface (Strategy pattern)
@@ -224,6 +276,7 @@ src/camera/pipeline/
 src/camera/rtsp/
   RtspServer.{h,cpp}               GstRTSPServer wrapper, implements IStreamController
   MountController.{h,cpp}          Per-camera mount state + frame tracking + watchdog
+                                   + network-mode detection thread
 src/camera/control/
   ControlServer.{h,cpp}            TCP(+TLS) server + JSON-RPC envelope (transport only)
   ControlRegistry.{h,cpp}          Method name -> IControlHandler map (Registry)

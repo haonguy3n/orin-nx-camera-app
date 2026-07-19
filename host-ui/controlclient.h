@@ -8,7 +8,7 @@
 
 class QTcpSocket;
 
-// JSON-over-TCP control channel client (see ../proto/PROTOCOL.md):
+// JSON-over-TCP control channel client (see docs/PROTOCOL.md):
 // newline-delimited JSON objects, request/response matched by "id".
 class ControlClient : public QObject
 {

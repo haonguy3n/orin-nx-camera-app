@@ -1,10 +1,12 @@
 # host-ui — camera-viewer
 
 Host-side viewer and device control for the dual-camera device (see
-`../DESIGN.md`, sections 4–5). Qt 6 Widgets + Qt Multimedia (QMediaPlayer +
-QVideoWidget); no QML, no direct GStreamer dependency. Qt 6 decodes via its FFmpeg media backend, which
-handles the device's H.265/H.264 RTSP streams; there are no public low-latency
-tuning knobs on QMediaPlayer — acceptable for M1.
+`DESIGN.md` sections 4–5, `TRANSPORT-ARCHITECTURE.md`). Qt 6 Widgets, no
+QML. Each pane is a `FrameView` that paints the video frame and the
+face-detection boxes in one pass (QVideoWidget was dropped — overlaying
+on it fought the compositor). Network-mode RTSP is decoded by
+QMediaPlayer's FFmpeg backend; the secure USB stream is decoded
+in-process by GStreamer (`avdec_h265`, gst-libav).
 
 ## Device addressing
 
@@ -15,20 +17,25 @@ The device enumerates as a USB network interface (CDC-NCM):
 
 The URL bar accepts either a bare host/IP (`192.168.55.1` → default port 8554
 and mounts) or an `rtsp://host:port` base URL. **Discover** (next to Connect)
-broadcasts a UDP discovery request on port **8556** (`../proto/PROTOCOL.md`,
+broadcasts a UDP discovery request on port **8556** (`PROTOCOL.md`,
 "Discovery") and fills the host box with the replying device's address; if
 several devices answer, a popup menu on the button lets you pick one.
 
 ## Build
 
-Requires: CMake ≥ 3.16, a C++17 compiler, Qt 6 with the Widgets, Multimedia,
-MultimediaWidgets and Network modules (Arch: `qt6-base`, `qt6-multimedia`; make
-sure the FFmpeg backend package `qt6-multimedia-ffmpeg` is installed).
+Requires: CMake ≥ 3.16, a C++20 compiler, Qt 6 with the Widgets, Multimedia,
+MultimediaWidgets and Network modules, libusb, OpenSSL, and the GStreamer
+app library plus gst-libav at runtime (Arch: `qt6-base qt6-multimedia
+libusb openssl gstreamer gst-plugins-base gst-libav`; make sure the FFmpeg
+backend package `qt6-multimedia-ffmpeg` is installed).
+
+`host-ui/build.sh` wraps configure + build, checks the tools, locates a
+secure-USB trust anchor, and (with `run`) kills stale viewer instances
+before launching — a second viewer's SET_INTERFACE resets the USB
+endpoints under the first:
 
 ```sh
-cmake -S host-ui -B host-ui/build
-cmake --build host-ui/build
-./host-ui/build/camera-viewer
+cd host-ui && ./build.sh run
 ```
 
 ## Run
@@ -57,14 +64,23 @@ The secure transport pins the device certificate selected during pairing. A
 certificate mismatch is an authentication failure and never falls back to
 plaintext networking.
 
-Set `CAMERA_SECURE_USB_CERT` to the *path* of the paired device's certificate
-PEM before starting the viewer (an absolute path -- it is passed to `fopen`
-unexpanded, so `~` does not work). Copy it off the device once:
+`CAMERA_SECURE_USB_CERT` points at the trust anchor PEM (an absolute
+path -- it is passed to `fopen` unexpanded, so `~` does not work).
+Either works:
+
+- `ca.crt` — any camera signed by that CA is accepted
+  (`scripts/provision-device-cert.sh --device-id <id> --out
+  ~/camera-certs/<id>`)
+- `server.crt` — that one device only, i.e. certificate pinning:
 
 ```sh
 scp root@192.168.55.1:/etc/camera-streamer/tls/server.crt ~/.config/camera-viewer/device.crt
 CAMERA_SECURE_USB_CERT=$HOME/.config/camera-viewer/device.crt ./camera-viewer
 ```
+
+`build.sh run` finds the anchor automatically in the usual locations
+(`~/camera-certs/*/ca.crt`, `~/.config/camera-viewer/`); an unfound
+anchor is reported, never silently skipped.
 
 The in-process bridge claims only the vendor interface. Video arrives as an
 encrypted H.265 elementary stream and is decoded in-process straight into the
@@ -76,7 +92,7 @@ Claiming the interface needs `70-camera-secure-usb.rules` installed into
 
 ## Zero-build fallback
 
-`scripts/preview.sh [device-ip]` opens both streams without building anything:
+`host-ui/scripts/preview.sh [device-ip]` opens both streams without building anything:
 it prefers `ffplay` (with `-fflags nobuffer -flags low_delay`), falling back to
 `gst-launch-1.0 playbin`. Handy for closing M1 before the Qt app is built.
 
@@ -93,7 +109,7 @@ must be mounted at `/cam0` and `/cam1`).
 
 A panel on the right of the video panes talks to the device's control channel:
 newline-delimited JSON over TCP, port **8555** (protocol reference:
-`../proto/PROTOCOL.md`). **Connect** opens it alongside the RTSP streams (same
+`PROTOCOL.md`). **Connect** opens it alongside the RTSP streams (same
 host as the video; the control port is always 8555). While connected, the panel
 polls `get-status` every 2 s (per-camera streaming state, frame counter, and —
 while frames flow — the `last_frame` sequence number) and offers per-camera
@@ -129,8 +145,18 @@ decoded video and writes a corrected white trim via `set-tuning`. Applying
 restarts the device's Argus daemon and all streams (~5 s outage), so the UI
 waits, reconnects both panes, lets AE settle, re-measures, and iterates once
 more if needed; progress and the final R/G / B/G residuals appear in the
-Device status line.
+Device status line. **Note**: `set-tuning` is not implemented on the
+device yet (PROTOCOL.md) — current devices answer unknown-method and the
+calibrator reports "device does not support set-tuning".
 
-## Milestone 2 roadmap (remaining)
+## Face-detection overlay
+
+Boxes arrive on the secure session's metadata channel (usb) or as
+`{"event":"faces"}` control events (network) — same payload either way
+(TRANSPORT-ARCHITECTURE.md). `MainWindow::applyFaceMeta` normalises by
+the payload's `w`/`h` and `FrameView` draws them over the frame. No
+toggle: boxes show whenever the device sends them.
+
+## Open items
 
 - Per-pane stream stats and reconnect-on-stall handling.

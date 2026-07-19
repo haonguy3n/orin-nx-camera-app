@@ -1,17 +1,22 @@
-# Camera control protocol (M2)
+# Camera control protocol
 
-TCP control channel between the host UI and `camera-streamer` on the device.
+Control channel between the host UI and `camera-streamer` on the device.
+The same protocol rides both transports (`[server] transports`):
 
-- **Transport**: TCP, default port **8555** (`[server] control-port`,
-  `0` disables), plaintext by default — optionally TLS/mTLS, see
-  "Transport security" below. The server binds the same address as the
-  RTSP server (`[server] listen`), so the control channel is reachable
-  over the same network(s) as the video.
+- **Carrier, network mode**: TCP, default port **8555**
+  (`[server] control-port`, `0` disables), plaintext by default —
+  optionally TLS/mTLS, see "Transport security" below. The server binds
+  the same address as the RTSP server (`[server] listen`).
+  Debuggable by hand: `nc 192.168.55.1 8555`.
+- **Carrier, usb mode**: the control channel of the encrypted USB
+  session — no TCP listener exists. Requests are dispatched in-process
+  on the device; byte-identical payloads.
 - **Framing**: newline-delimited UTF-8 JSON — exactly one JSON object per
   line (`\n` terminated) in each direction. No message may contain a raw
-  newline. Debuggable by hand: `nc 192.168.55.1 8555`.
-- **Model**: request/response only; the server never sends unsolicited
-  messages. Poll `get-status` for liveness/state. Multiple concurrent client
+  newline.
+- **Model**: request/response, plus server-initiated **events**: a line
+  with no `"id"` member is an event, not a response (see "Events").
+  Poll `get-status` for liveness/state. Multiple concurrent client
   connections are allowed.
 
 This replaces the protobuf channel sketched in DESIGN.md §4 — same wire role,
@@ -327,6 +332,52 @@ re-enabling restarts it within ~200 ms. The flag also updates the runtime
 config, so `get-config` reflects it; it is not persisted across restarts.
 (Over RTSP, streams already start/stop with client connections; this method
 additionally marks the camera disabled for future sessions.)
+
+### `get-metrics`
+
+No params. → resource load and temperatures:
+
+```json
+{"cpu_percent": 12.5, "process_cpu_percent": 4.1, "gpu_percent": 26.0,
+ "vic_percent": 70.0, "nvenc_percent": 30.0, "cpu_temp_c": 48.5,
+ "gpu_temp_c": 47.0, "interval_s": 2.0}
+```
+
+Percentages are deltas over `interval_s` (time since the previous call).
+The first call after service start only primes the counters and reports
+negatives — poll twice and use the second.
+
+### `snapshot`
+
+`{"camera": N, "path": "/tmp/x.ppm"?}` → `{"path": ..., "pending": true}`
+
+Writes the next frame off the detection branch as a PPM on the *device*
+(default `/tmp/snapshot-camN.ppm`) — raw ISP output, for judging colour
+tuning. The write happens on the next detection frame, after the reply.
+Fails if no readable `[detect]` model is installed (the detection branch
+is the frame source).
+
+### `set-tuning`
+
+Declared in `Protocol.h` and sent by the host UI's white-balance
+calibrator; **not implemented on the device yet** — answers `-32601`
+(unknown method).
+
+## Events
+
+Server-initiated lines with no `"id"` member. Clients must skip unknown
+events. Currently one:
+
+```json
+{"event": "faces", "camera": 0,
+ "data": {"camera": 0, "w": 320, "h": 240,
+          "faces": [{"x": 12, "y": 30, "w": 40, "h": 52, "score": 0.71}]}}
+```
+
+Face-detection boxes, pushed to every control connection in network
+mode (in usb mode the same `data` payload arrives on the session's
+metadata channel instead). Coordinates are in the detector working frame
+— normalise by the payload's `w`/`h`.
 
 ## OTA firmware update (TCP, port 8557)
 

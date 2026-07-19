@@ -25,7 +25,7 @@ struct CameraConfig {
     int bitrate = 8000000;          // bit/s
 
     // Sensor settings, also settable at runtime via the control protocol
-    // (proto/PROTOCOL.md). argus: mapped to nvarguscamerasrc range
+    // (docs/PROTOCOL.md). argus: mapped to nvarguscamerasrc range
     // properties; v4l2: mapped to the VC driver's V4L2 controls.
     int exposure = 0;               // us; 0 = auto (argus) / driver default
     double gain = 0;                // 0 = auto/default; argus: multiplier,
@@ -84,7 +84,7 @@ struct Config {
     // RTSP connection, default -- survives hosts that drop unsolicited
     // inbound UDP), udp, or all (client picks; gst clients prefer UDP).
     std::string transport = "tcp";
-    // TCP control server (proto/PROTOCOL.md), bound to the same address as
+    // TCP control server (docs/PROTOCOL.md), bound to the same address as
     // the RTSP server. 0 disables it.
     int control_port = proto::kControlPort;
     // UDP discovery responder (always 0.0.0.0). 0 disables it.

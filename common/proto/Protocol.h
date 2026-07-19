@@ -1,5 +1,5 @@
 // Single source of truth for the host <-> device protocol constants
-// (documented in proto/PROTOCOL.md). Shared by embedded/ (camera-streamer,
+// (documented in docs/PROTOCOL.md). Shared by embedded/ (camera-streamer,
 // GLib) and host-ui/ (Qt): pure C++17, no framework dependencies — keep it
 // that way so both sides can include it.
 #pragma once

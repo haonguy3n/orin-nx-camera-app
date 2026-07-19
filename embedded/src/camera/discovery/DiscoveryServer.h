@@ -1,4 +1,4 @@
-// UDP discovery responder (proto/PROTOCOL.md "Discovery"): answers
+// UDP discovery responder (docs/PROTOCOL.md "Discovery"): answers
 // {"method":"discover"} broadcasts with device/port info, so the host UI
 // can find cameras instead of assuming 192.168.55.1.
 #pragma once

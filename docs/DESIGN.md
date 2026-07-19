@@ -6,11 +6,13 @@ over USB**, with a host-side UI application.
 
 ---
 
-> **Transport architecture (agreed 2026-07-19):** encryption and channel
-> multiplexing sit above the transport, so USB and network carry the same
-> encrypted record protocol and network mode becomes CSU-over-TCP rather than
-> RTSP. See [docs/TRANSPORT-ARCHITECTURE.md](docs/TRANSPORT-ARCHITECTURE.md).
-> Sections below that assume RTSP is the network path predate that decision.
+> **Transport architecture (settled 2026-07-19):** one transport serves video
+> at a time, chosen by `[server] transports`. `usb` (default) multiplexes
+> video/control/update/detection into an encrypted record protocol over
+> FunctionFS endpoints; `network` is plain RTSP + TCP control for interop.
+> The earlier CSU-over-TCP plan (same record protocol on both carriers) was
+> dropped. See [TRANSPORT-ARCHITECTURE.md](TRANSPORT-ARCHITECTURE.md)
+> for the class→file map. Sections below describing RTSP describe network mode.
 
 ## 1. System overview
 
@@ -19,15 +21,16 @@ over USB**, with a host-side UI application.
 │  Jetson Orin NX (Yocto image)               │   USB   │  Linux Host              │
 │                                             │ (device │                          │
 │  IMX296 #1 ──CSI(1-lane)──┐                 │  mode)  │  ┌────────────────────┐  │
-│  IMX296 #2 ──CSI(1-lane)──┤                 │         │  │ Host UI app (Qt6 + │  │
-│                            ▼                │  CDC-   │  │ GStreamer)         │  │
-│  VC MIPI driver (patched L4T 35.x kernel)   │  NCM    │  │  - 2x video views  │  │
-│  ┌───────────────────────────────────┐      │ gadget  │  │  - camera controls │  │
-│  │ camera-streamer (C++ app)         │◄─────┼─────────┼─►│  - connection mgmt │  │
-│  │  - capture: Argus/V4L2 via GST    │ RTSP │ 192.168.│  └────────────────────┘  │
-│  │  - HW encode: nvv4l2h265enc      │ + TCP │ 55.0/24 │                          │
-│  │  - RTSP server /cam0 /cam1        │ ctrl  │         │                          │
-│  │  - control server (TCP/JSON±TLS)  │       │         │                          │
+│  IMX296 #2 ──CSI(1-lane)──┤ (cam1 disabled) │         │  │ camera-viewer      │  │
+│                            ▼                │ ffs.    │  │ (Qt6 Widgets)      │  │
+│  VC MIPI driver (patched L4T 35.x kernel)   │ secure  │  │  - video + face-   │  │
+│  ┌───────────────────────────────────┐      │ ep1/ep2 │  │    box overlay     │  │
+│  │ camera-streamer (C++ app)         │◄─────┼────and──┼─►│  - camera controls │  │
+│  │  - capture: Argus/V4L2 via GST    │      │  CDC-   │  │  - OTA upload      │  │
+│  │  - HW encode: nvv4l2h265enc       │      │  NCM    │  └────────────────────┘  │
+│  │  - face detect: YuNet (CUDA)      │      │ 192.168.│                          │
+│  │  - usb: encrypted record mux      │      │ 55.0/24 │                          │
+│  │  - network: RTSP + TCP ctrl ±TLS  │      │         │                          │
 │  └───────────────────────────────────┘      │         │                          │
 └─────────────────────────────────────────────┘         └──────────────────────────┘
 ```
@@ -85,24 +88,26 @@ minor deltas to 35.6.1/.2 are usually trivial but must be checked). Record the p
 
 ```
 camera-app/
-├── DESIGN.md
+├── docs/                                    # all documentation (this file, PROTOCOL.md, ...)
 ├── yocto/meta-vc-camera/
 │   ├── conf/layer.conf
 │   ├── recipes-kernel/linux/
 │   │   ├── linux-tegra_%.bbappend           # VC driver + DT integration (see 2.3/2.4)
-│   │   └── files/
-│   │       ├── 0001-add-vc-mipi-driver.patch
-│   │       ├── 0002-dt-dual-imx296-p3768.patch
-│   │       └── vc-mipi.cfg                  # defconfig fragment
+│   │   └── files/                           # vendored VC patch set (0001..0015),
+│   │                                        #   vc_mipi_* sources, .dtsi, vc-mipi.cfg
 │   ├── recipes-core/usb-gadget/
-│   │   └── usb-gadget-init.bb               # configfs NCM(+ACM) gadget + systemd unit
-│   ├── recipes-apps/camera-streamer/
-│   │   └── camera-streamer_git.bb           # our C++ app (CMake)
+│   │   └── usb-gadget-init.bb               # configfs NCM+ACM+FunctionFS gadget + unit
+│   ├── recipes-core/systemd/                # hardware watchdog config
+│   ├── recipes-bsp/isp-tuning/              # measured camera_overrides.isp (black level)
+│   ├── recipes-bsp/uefi/                    # A/B boot support (edk2/OP-TEE tweaks)
+│   ├── recipes-apps/camera-streamer/        # our C++ app (CMake)
+│   ├── recipes-apps/camera-device-cert/     # first-boot device certificate
+│   ├── recipes-apps/camera-face-model/      # YuNet ONNX model
 │   └── recipes-images/
-│       └── camera-image.bb                  # demo-image-base + camera bits
+│       └── camera-image.bb                  # demo-image-base + camera bits + swupdate
 ├── embedded/                                # camera-streamer C++ source
-├── host-ui/                                 # Qt6 host application
-└── proto/                                   # shared control-protocol schema (M2)
+├── host-ui/                                 # Qt6 host application (camera-viewer)
+└── common/                                  # code built into both sides (proto/, secure/)
 ```
 
 ### 2.3 Driver integration (`linux-tegra_%.bbappend`)
@@ -164,6 +169,9 @@ gadget:
 - **CDC-NCM** — USB network interface, static `192.168.55.1/24` on device, dnsmasq
   serving the host `192.168.55.100`. (RNDIS instead only if Windows hosts matter.)
 - **ACM** — serial console on the same cable; free insurance during bring-up.
+- **FunctionFS (`ffs.secure`)** — raw bulk endpoints for the secure USB
+  transport (added later; `camera-streamer` owns the endpoint files, the
+  gadget script only creates the function and mounts the ffs instance).
 
 Why network-over-USB instead of a UVC (webcam) gadget:
 
@@ -252,34 +260,45 @@ host: `gst-launch-1.0 udpsrc port=5000 ! … ! autovideosink`.
 
 C++20, CMake, systemd service. A supervised GStreamer graph plus the servers
 around it (the tree below is the shipped structure — folly/fboss-style naming,
-`namespace camera`; see `embedded/README.md` for the full layout):
+`namespace camera`; see `EMBEDDED.md` for the full layout):
 
 ```
 camera-streamer (embedded/src/camera/)
-├── config/       INI (GKeyFile): sensor mode, path (argus|v4l2), bitrate, ports, TLS
-├── pipeline/     CameraSource strategies: ArgusSource | V4l2Source | TestSource
-├── rtsp/         RtspServer + per-camera MountController (gst-rtsp-server, /cam0 /cam1)
-├── control/      ControlServer — TCP(+TLS), newline-delimited JSON  [done, M2]
-│                   exposure/gain/trigger/ISP/zoom/sync, status, reload, reboot
+├── config/       INI (GKeyFile): transports (usb|network), sensor mode, path
+│                   (argus|v4l2), bitrate, ports, TLS
+├── media/        programmatic GStreamer model: Element/Bin/Pipeline/Tee +
+│                   CameraPipeline (one per sensor, video + raw-frame fanout)
+├── pipeline/     launch-string fragments + CameraSource strategies:
+│                   ArgusSource | V4l2Source | TestSource
+├── secure/       usb mode: FfsGadget + SecureUsbServer (handshake, session,
+│                   channel mux over ep1/ep2); wire crypto in ../common/secure/
+├── detect/       YuNet face detector (OpenCV/CUDA), IMetaSink delivery split,
+│                   ISP snapshot writer
+├── rtsp/         network mode: RtspServer + per-camera MountController
+├── control/      ControlServer — TCP(+TLS) in network mode, dispatched
+│                   in-process in usb mode; one handler class per method
 ├── update/       UpdateServer (.swu upload, port 8557) + SwupdateClient (swupdate IPC)
-├── discovery/    UDP discovery responder
+├── discovery/    UDP discovery responder (network mode)
+├── lib/          low-level access: NetworkResolver, V4l2Device, ResourceMonitor
 ├── core/         Application lifecycle + systemd watchdog; stall watchdog policy:
 │                   a stalled camera is disabled in place (others keep streaming),
 │                   exit-for-restart only when every camera is dead
-└── folly/        vendored folly-mimic support layer (Expected, File, Synchronized,
+└── base/         vendored folly-mimic support layer (Expected, File, Synchronized,
                     SCOPE_EXIT, XLOGF, GIO-backed EventBase/AsyncServerSocket/SSLContext)
 ```
 
 Cross-cutting: `common/proto/Protocol.h` holds the protocol constants shared
-with the host UI; the control and update channels take optional TLS/mTLS
-(`[server] tls-cert/tls-key/tls-ca`, self-signed device cert generated on
-first boot — the "secure USB" story: only host software holding a
-CA-signed client cert can command the device).
+with the host UI. In network mode the control and update channels take
+optional TLS/mTLS (`[server] tls-cert/tls-key/tls-ca`). In usb mode the same
+device certificate instead signs the secure-transport handshake
+(`common/secure/`), so only hosts holding the trust anchor can pair; the cert
+is generated on first boot (or provisioned via
+`scripts/provision-device-cert.sh`).
 
 The control channel shipped as **newline-delimited JSON over TCP (port
 8555)** instead of protobuf — same wire role, but no codegen, no extra host
 dependency (Qt ships JSON, json-glib is in oe-core), and debuggable with
-`nc`. The schema lives in `proto/PROTOCOL.md` (shared by both sides), and
+`nc`. The schema lives in `PROTOCOL.md` (shared by both sides), and
 the door to protobuf stays open if the protocol ever outgrows JSON.
 
 Design notes:
@@ -302,14 +321,18 @@ Design notes:
 
 ## 5. Host UI application
 
-- **Qt 6 + QML**, video via explicit GStreamer pipelines
-  (`rtspsrc latency=0 ! decodebin ! glsinkbin`/`qml6glsink`) so latency is controllable
-  and pipeline knowledge is shared with the device side.
-- Two video panes (cam0/cam1), connection panel (fixed 192.168.55.1 for M1), controls
-  pane speaking the JSON-over-TCP protocol (`proto/PROTOCOL.md`, M2): status polling,
-  exposure/gain per camera, hardware trigger mode.
-- Plain desktop app in `host-ui/`, not part of the Yocto build; shares `proto/` with
-  the embedded app.
+- **Qt 6 Widgets** (`camera-viewer`). Video decode is in-process GStreamer
+  (`avdec_h265`); `FrameView` paints the frame and the detection boxes in one
+  surface (QVideoWidget was dropped — overlaying on it fought the compositor).
+- `SecureUsbBridge` (libusb) carries the usb-mode session: handshake against a
+  trust anchor (`CAMERA_SECURE_USB_CERT`), then demuxes video/control/update/
+  meta channels. In network mode the same UI uses `rtspsrc` + `ControlClient`
+  (JSON over TCP, detection boxes arrive as pushed events).
+- Connection panel with UDP discovery, controls pane speaking
+  `PROTOCOL.md`: status polling, exposure/gain, trigger, ISP, zoom,
+  white-balance calibration, OTA upload with progress.
+- Plain desktop app in `host-ui/` (`./build.sh run`), not part of the Yocto
+  build; shares `common/` with the embedded app.
 
 ---
 
@@ -329,8 +352,13 @@ concurrent 1440×1080@60 H.265 streams, Qt UI dual view + control panel,
 JSON/TCP control channel (exposure/gain/trigger/ISP/zoom, status with live AE
 readback, reload), pipeline stall watchdog, OTA updates via swupdate (A/B).
 
+**M2.5 — secure USB + on-device detection** ✅ *verified on hardware*: the
+`transports=usb` mode (encrypted record protocol over FunctionFS endpoints,
+no TCP/UDP sockets except the recovery listener) and YuNet face detection on
+the GPU with boxes delivered on both transports and drawn by the host UI.
+
 **M3 — productization**: hardware-triggered sync capture, frame metadata (timestamp,
-sequence), device discovery, OTA (RAUC/Mender on meta-tegra), factory flash flow.
+sequence), device discovery, OTA (shipped: swupdate, A/B rootfs), factory flash flow.
 *Bring-up finding for sync capture*: the pure-V4L2 path needs a DT change first —
 the VC template declares every mode `bayer/rggb`, so the mono IMX296 only exposes
 RG10 (no GREY/Y10), which `v4l2src` cannot consume; both cameras currently stream
@@ -355,4 +383,4 @@ trigger wiring, factory flash flow.
 | USB2-only device mode (~350 Mbit/s) | HW encode on device (designed in). If the host ever needs raw frames, use GigE or reduced fps/ROI. |
 | DTB is flashed on JP5 → slow DT iteration | Script the DTB-only reflash path during bring-up. |
 | Future JP6 migration changes integration model (nvidia-oot + .dtbo overlays) | Isolated in `meta-vc-camera` (one bbappend + DT recipe swap); app and gadget layers unaffected. |
-| Which IMX296 variant (mono vs color)? VC adapter wiring on the two devkit CSI ports? | **Open — determines Argus-vs-V4L2 default and the exact DT. Confirm before writing patch 0002.** |
+| Which IMX296 variant (mono vs color)? | *Resolved on hardware*: cam0 is the color IMX296C (Argus/ISP), cam1 the mono IMX296. cam1 is currently unplugged and disabled in config — it did not enumerate even when fitted (Argus saw one sensor), and the DT declares it bayer so pure-V4L2 grey capture still needs the M3 DT change. |

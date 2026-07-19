@@ -4,7 +4,7 @@
 # (RidgeRun/NVIDIA-Jetson-IMX477-RPIV3); libargus loads this file from
 # /var/nvidia/nvcam/settings/camera_overrides.isp (mode 664) and applies it
 # over the default tuning. Fill the measured values in (workflow in
-# tools/isp-tuning/README.md), deploy via the vc-isp-tuning recipe.
+# docs/ISP-TUNING.md), deploy via the vc-isp-tuning recipe.
 #
 # Argus silently ignores a file it cannot parse — after every edit, verify
 # a visible change actually happens before trusting the numbers.

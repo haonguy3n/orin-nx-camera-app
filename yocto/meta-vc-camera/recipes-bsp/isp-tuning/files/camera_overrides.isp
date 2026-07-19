@@ -4,7 +4,7 @@
 # calibrated optical black, AWB gray-line model, dual-illuminant CCM, tone
 # curve, noise-reduction and sharpness tables.
 #
-# Adapted for this camera (see tools/isp-tuning/README.md):
+# Adapted for this camera (see docs/ISP-TUNING.md):
 #   - autoFramerateRange pinned to the IMX296's real limits. The stock file
 #     allowed {7.5, 120}: 120 fps is impossible on this sensor, and in dim
 #     light AE was licensed to drop it to 7.5 fps, starving the 60 fps
@@ -12,8 +12,9 @@
 #   - autofocus, flash and color-effect (sepia/aqua/...) sections dropped:
 #     fixed-focus lenses, no flash hardware, effects never used. Argus uses
 #     its defaults for anything absent here.
-#   - optical black kept at 60 LSB, which matches our own dark-frame
-#     measurement of this sensor exactly.
+#   - optical black doubled to 120 LSB (measured on target: the 60-LSB
+#     dark-frame value under-subtracted and left a magenta cast). A single
+#     value slightly over-subtracts blue; per-channel bias still TODO.
 #
 
 #* =============================================================

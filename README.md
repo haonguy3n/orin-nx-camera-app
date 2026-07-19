@@ -41,26 +41,33 @@ Open: colour calibration is partly done — the optical-black pedestal fix
 removed the magenta cast, but the current single value over-subtracts blue, so
 a per-channel bias is still needed. Hardware-triggered sync capture and factory
 flash remain. **cam1 is currently disabled**: the second sensor is unplugged,
-and it did not enumerate before that (Argus saw one sensor). See `DESIGN.md`
-for architecture and milestones.
+and it did not enumerate before that (Argus saw one sensor). See
+`docs/DESIGN.md` for architecture and milestones.
 
 ## Layout
 
+All documentation lives in `docs/` (recipe-local notes stay next to their
+recipes):
+
 | Path | What |
 |---|---|
-| `DESIGN.md` | architecture, decisions, milestones, risks |
-| `embedded/` | `camera-streamer`: GStreamer RTSP + control/discovery/update servers (C++17, folly-style — see its README) |
+| `docs/DESIGN.md` | architecture, decisions, milestones, risks |
+| `docs/TRANSPORT-ARCHITECTURE.md` | the two transport modes: class→file map, threading |
+| `docs/PROTOCOL.md` | the JSON control protocol both sides implement |
+| `docs/EMBEDDED.md` | `camera-streamer` reference: build, config keys, service |
+| `docs/HOST-UI.md` | `camera-viewer` reference: build, transports, control panel |
+| `docs/YOCTO.md` | how the layer hooks into the build, flashing, OTA |
+| `docs/ISP-TUNING.md` | DIY ISP calibration (black level, CCM) without NVIDIA's NDA tools |
+| `embedded/` | `camera-streamer`: secure-USB + RTSP transports, control/discovery/update servers, face detection (C++20, folly-style) |
 | `host-ui/` | `camera-viewer`: Qt6 dual-pane viewer + camera control panel (`./build.sh run`) |
-| `common/` | `proto/Protocol.h`: protocol constants (ports, methods, error codes) shared by both sides |
-| `proto/PROTOCOL.md` | the JSON/TCP control protocol both sides implement |
+| `common/` | code built into both sides: `proto/Protocol.h` constants, `secure/` handshake + wire crypto |
 | `yocto/meta-vc-camera/` | Yocto layer: VC kernel driver + DT, USB gadget, ISP tuning, image |
-| `common/secure/` | Native C++ P-256 handshake shared by the device endpoint and host USB client |
-| `tools/isp-tuning/` | DIY ISP calibration (black level, CCM) without NVIDIA's NDA tools |
+| `tools/isp-tuning/` | the calibration scripts themselves |
 
 ## Quickstart
 
 **Device image** (build machine with the `~/Projects/orin-nx` yb project —
-see `yocto/README.md` for how the layer hooks in):
+see `docs/YOCTO.md` for how the layer hooks in):
 
 ```sh
 cd ~/Projects/orin-nx && yb build orin-nx.yml
@@ -89,10 +96,12 @@ printf '{"id":1,"method":"get-status"}\n' | nc -q1 192.168.55.1 8555
 
 The native C++ secure-transport protocol uses an ephemeral P-256 ECDH
 exchange, the device's pinned certificate to sign the handshake, HKDF-SHA256
-directional keys, and ChaCha20-Poly1305 records. The FunctionFS/libusb relay
-that binds these records to the viewer is tracked alongside it. The existing
-CDC-NCM RTSP/control path remains available for recovery and can be selected
-at image-build time with `CAMERA_USB_TRANSPORT=ncm`.
+directional keys, and ChaCha20-Poly1305 records. The records ride dedicated
+FunctionFS endpoints (`ffs.secure` in the composite gadget) on the device and
+libusb in the viewer — verified on hardware. The CDC-NCM network interface
+stays up in both modes for ssh and the recovery `.swu` listener; switching to
+the RTSP/control path is a config change (`transports=network` + reload), not
+an image rebuild.
 
 ## Bring-up lessons (why some defaults look unusual)
 

@@ -34,7 +34,7 @@ inherit cmake pkgconfig systemd externalsrc cuda
 EXTERNALSRC = "${@os.path.normpath(os.path.join(os.path.realpath(d.getVar('VC_CAMERA_LAYERDIR')), '..', '..'))}"
 OECMAKE_SOURCEPATH = "${EXTERNALSRC}/embedded"
 
-# json-glib + glib (gio) serve the TCP control protocol (proto/PROTOCOL.md).
+# json-glib + glib (gio) serve the TCP control protocol (docs/PROTOCOL.md).
 # swupdate is needed at runtime for OTA firmware updates (the app talks to
 # swupdate's IPC socket at /tmp/sockinstctrl); it's in RDEPENDS, not DEPENDS,
 # because the app defines the IPC structs locally (no swupdate headers/libs
