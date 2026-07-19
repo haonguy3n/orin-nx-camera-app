@@ -68,12 +68,21 @@ std::string PipelineBuilder::detect_branch(int width, int height) {
     // format and cannot rescale, so putting width/height on its output caps
     // fails negotiation and breaks the whole tee. nvvidconv does the resize
     // (and the NVMM->CPU download); videoconvert then only BGRx->BGR.
+    //
+    // async=false is what makes the leaky queue above safe. A sink normally
+    // gates the pipeline's async state change until it prerolls one buffer --
+    // but leaky=downstream drops exactly that buffer, so this appsink never
+    // prerolls and the WHOLE pipeline stays stuck in PAUSED: no video on the
+    // encode branch either, and teardown of a stuck pipeline is what makes
+    // restarts crawl. async=false takes this sink out of the state change, so
+    // the detect branch can stall or drop freely without touching video.
     return "queue leaky=downstream max-size-buffers=1"
            " ! nvvidconv ! video/x-raw,format=BGRx"
            ",width=" + std::to_string(width) +
            ",height=" + std::to_string(height) +
            " ! videoconvert ! video/x-raw,format=BGR"
-           " ! appsink name=detect sync=false max-buffers=1 drop=true";
+           " ! appsink name=detect sync=false async=false"
+           " max-buffers=1 drop=true";
 }
 
 std::string PipelineBuilder::zoom_crop(const CameraConfig& cam) {

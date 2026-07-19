@@ -144,6 +144,20 @@ struct Pipeline {
             *error = "pipeline refused to start";
             return false;
         }
+        // set_state returns ASYNC for a live source, so "no failure" does not
+        // mean running. Wait for the state to settle: a branch that never
+        // prerolls leaves the pipeline in PAUSED, which is indistinguishable
+        // from a camera producing nothing -- except it also makes teardown
+        // hang. Say so instead of stalling silently. 10s covers Argus startup.
+        GstState state = GST_STATE_NULL;
+        if (gst_element_get_state(element, &state, nullptr, 10 * GST_SECOND) !=
+                GST_STATE_CHANGE_SUCCESS ||
+            state != GST_STATE_PLAYING) {
+            *error = "pipeline did not reach PLAYING (stuck in " +
+                     std::string(gst_element_state_get_name(state)) +
+                     "); a branch is not prerolling";
+            return false;
+        }
         return true;
     }
 
