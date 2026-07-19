@@ -47,6 +47,74 @@ it is absent: RTSP video is in the clear and boxes ride a control event. That
 asymmetry is the accepted trade-off recorded below, not an unfinished edge.
 
 
+## Where the code lives
+
+| Role | Class | File |
+|---|---|---|
+| Capture, one per sensor | `media::CameraPipeline` | `media/CameraPipeline.{h,cpp}` |
+| Delivery strategy (video) | `media::IFrameTransport` | `media/CameraPipeline.h` |
+| Launch strings | `PipelineBuilder` | `pipeline/PipelineBuilder.{h,cpp}` |
+| Detector (YuNet/CUDA) | `detect::IFaceDetector` | `detect/FaceDetector.{h,cpp}` |
+| Box payload | `detect::to_meta_json` | `detect/FaceDetector.cpp` |
+| Delivery strategy (boxes) | `detect::IMetaSink` | `detect/MetaSink.h` |
+
+**usb mode**
+
+| Role | Class | File |
+|---|---|---|
+| Transport, session, crypto | `SecureUsbServer` | `secure/SecureUsbServer.cpp` |
+| Video -> `Channel::Video` | `VideoSink` | same file |
+| Raw -> detector | `DetectSink` | same file |
+| Boxes -> `Channel::Meta` | `SessionMetaSink` | same file |
+| Gadget lifecycle | `FfsGadget` | `secure/FfsGadget.{h,cpp}` |
+
+**network mode**
+
+| Role | Class | File |
+|---|---|---|
+| RTSP server, mounts | `RtspServer` | `rtsp/RtspServer.{h,cpp}` |
+| Per-mount media + detection thread | `MountController` | `rtsp/MountController.{h,cpp}` |
+| Boxes -> control event | `ControlMetaSink` | `core/Application.cpp` |
+| Push to clients | `ControlServer::broadcast` | `control/ControlServer.cpp` |
+
+**host (both modes)**
+
+| Role | Class | File |
+|---|---|---|
+| USB carrier, session, demux | `SecureUsbBridge` | `host-ui/secureusbbridge.cpp` |
+| Control + event reception | `ControlClient` | `host-ui/controlclient.cpp` |
+| Boxes -> overlay | `MainWindow::applyFaceMeta` | `host-ui/mainwindow.cpp` |
+| Frame + boxes, one paint | `FrameView` | `host-ui/frameview.{h,cpp}` |
+
+## How a box reaches the screen
+
+1. `CameraPipeline::pump_raw()` on a dedicated thread pulls a BGRx frame from
+   the `detect` appsink (usb), or `MountController`'s detection thread pulls the
+   equivalent appsink in the RTSP media (network).
+2. `IFaceDetector::detect()` runs YuNet, and `to_meta_json` formats the boxes.
+   Identical on both modes.
+3. `IMetaSink::on_meta()` delivers: `SessionMetaSink` enqueues on
+   `Channel::Meta`; `ControlMetaSink` wraps it as
+   `{"event":"faces","camera":N,"data":...}` and broadcasts.
+4. Host: `SecureUsbBridge`'s demux, or `ControlClient::eventReceived` for a
+   line with no `"id"`.
+5. Both call `MainWindow::applyFaceMeta`, which normalises by the payload's
+   `w`/`h` and hands `FrameView` the boxes.
+
+Steps 1, 2 and 5 are shared code. Only step 3-4 differ by mode.
+
+## Threading
+
+- Video and detection pump on SEPARATE threads (`pump()` / `pump_raw()`).
+  Inference is ~25 ms against a ~16 ms frame interval, so sharing a thread
+  would stall the stream behind the detector.
+- `ControlMetaSink::on_meta` runs on the detection thread but `broadcast()`
+  touches the main loop's connection set, so it hops via
+  `g_main_context_invoke_full` and is fire-and-forget.
+- In usb mode, control requests are dispatched in-process and marshalled onto
+  the GLib main loop, because handlers mutate config and live GStreamer
+  elements.
+
 ## What is shared
 
 Everything above the transport split:
