@@ -16,6 +16,7 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
     : QWidget(parent)
     , m_name(name)
 {
+    setObjectName(QStringLiteral("videoPane"));
     setAutoFillBackground(true);
     QPalette pal = palette();
     pal.setColor(QPalette::Window, Qt::black);
@@ -26,6 +27,7 @@ VideoPane::VideoPane(const QString &name, QWidget *parent)
     layout->setSpacing(0);
 
     m_placeholder = new QWidget(this);
+    m_placeholder->setObjectName(QStringLiteral("videoPlaceholder"));
     m_placeholder->setAutoFillBackground(true);
     QPalette pal2 = m_placeholder->palette();
     pal2.setColor(QPalette::Window, Qt::black);

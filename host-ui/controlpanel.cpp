@@ -16,6 +16,7 @@ ControlPanel::ControlPanel(QWidget *parent)
     setFrameShape(QFrame::NoFrame);
     setWidgetResizable(true);
     setObjectName(QStringLiteral("controlPanel"));
+    viewport()->setObjectName(QStringLiteral("controlPanelViewport"));
     setMinimumWidth(350);
     setFixedWidth(380);
 
