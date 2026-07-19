@@ -61,6 +61,8 @@ private:
 
     const Config& config_;
     ISourceFactory& source_factory_;
+    // Where network-mode detection boxes go; null leaves detection off.
+    detect::IMetaSink* meta_sink_ = nullptr;
     std::string address_;
     GstRTSPServer* server_ = nullptr;
     guint attach_id_ = 0;
