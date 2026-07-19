@@ -47,6 +47,14 @@ public:
     camera::base::Expected<camera::base::Unit, std::string> start(
         const std::string& address, int port);
 
+    /// Adopts an already-connected socket and runs the normal upload handler
+    /// on it. Lets the secure-USB transport hand over an anonymous socketpair
+    /// instead of dialling 127.0.0.1: no port, no address, nothing on the
+    /// network stack -- while keeping the fd semantics the upload path relies
+    /// on (notably close() = end of upload). No TLS: the bytes already arrived
+    /// inside the encrypted USB session. Takes ownership of |fd|.
+    bool adopt_fd(int fd);
+
 private:
     void accept_connection(GSocketConnection* connection);
 

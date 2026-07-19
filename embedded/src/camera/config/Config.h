@@ -118,6 +118,12 @@ struct Config {
     // the ISP fix scored 0.32. The old built-in 0.6 rejected everything
     // pre-fix and still clips the weaker half of real detections.
     double detect_score = 0.45;
+    // Detections per second. Deliberately far below the 60 fps capture rate:
+    // boxes are only useful at UI refresh rates, and each detection costs a
+    // VIC scale+download plus a GPU inference. Measured on target, running the
+    // branch unthrottled held VIC ~70% and GR3D ~40% continuously -- heat and
+    // power for frames nobody looked at. 0 disables the limit.
+    int detect_fps = 10;
 
     CameraConfig cameras[kNumCameras];
 };

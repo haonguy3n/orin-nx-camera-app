@@ -137,6 +137,7 @@ Config FileConfigLoader::load() {
     cfg.detect_model = get_string(kf, "detect", "model", cfg.detect_model);
     cfg.detect_width = get_int(kf, "detect", "width", cfg.detect_width);
     cfg.detect_score = get_double(kf, "detect", "score", cfg.detect_score);
+    cfg.detect_fps = get_int(kf, "detect", "fps", cfg.detect_fps);
 
     cfg.update_port = get_int(kf, "server", "update-port", cfg.update_port);
     if (cfg.update_port < 0 || cfg.update_port > 65535) {

@@ -113,8 +113,10 @@ struct Pipeline {
     GstElement* element = nullptr;
     GstAppSink* sink = nullptr;
     GstAppSink* detect = nullptr;  // optional raw-BGR branch for face detection
+    GstElement* camsrc = nullptr;  // live source, for runtime properties
 
     ~Pipeline() {
+        if (camsrc) gst_object_unref(camsrc);
         if (element) {
             gst_element_set_state(element, GST_STATE_NULL);
             gst_object_unref(element);
@@ -150,6 +152,9 @@ struct Pipeline {
         // string carries a "detect" appsink (detection enabled).
         if (GstElement* d = gst_bin_get_by_name(GST_BIN(element), "detect"))
             detect = GST_APP_SINK(d);
+        // Named "camsrc" by the source builders; absent on the RTSP re-serve
+        // fallback, where there is no local source to poke.
+        camsrc = gst_bin_get_by_name(GST_BIN(element), "camsrc");
         if (gst_element_set_state(element, GST_STATE_PLAYING) ==
             GST_STATE_CHANGE_FAILURE) {
             *error = "pipeline refused to start";
@@ -305,13 +310,38 @@ private:
 class LocalTunnel {
 public:
     using Enqueue = std::function<bool(Channel, const uint8_t*, size_t)>;
-    LocalTunnel(std::atomic<bool>& dead, Enqueue enqueue)
-        : dead_(dead), enqueue_(std::move(enqueue)) {}
+    using Dispatch = std::function<std::string(const std::string&)>;
+    using OpenUpdate = std::function<int()>;
+    LocalTunnel(std::atomic<bool>& dead, Enqueue enqueue, Dispatch dispatch,
+                OpenUpdate open_update)
+        : dead_(dead), enqueue_(std::move(enqueue)),
+          dispatch_(std::move(dispatch)),
+          open_update_(std::move(open_update)) {}
 
     // Host -> local server. A dead local server drops its channel; it must not
     // end the session, which also carries video. Always returns true.
     bool deliver(const WireMessage& message) {
         if (message.channel == Channel::Video) return true;  // device-to-host only
+        // Control in-process: no loopback socket, so nothing to connect, drop
+        // or reconnect. Requests are newline-delimited and a record may carry
+        // a partial or several lines, so they are reassembled here -- the TCP
+        // path got that for free from GDataInputStream.
+        if (message.channel == Channel::Control && dispatch_) {
+            control_buffer_.append(
+                reinterpret_cast<const char*>(message.payload.data()),
+                message.payload.size());
+            size_t nl;
+            while ((nl = control_buffer_.find('\n')) != std::string::npos) {
+                const std::string line = control_buffer_.substr(0, nl);
+                control_buffer_.erase(0, nl + 1);
+                const std::string reply = dispatch_(line);
+                if (!reply.empty())
+                    enqueue_(Channel::Control,
+                             reinterpret_cast<const uint8_t*>(reply.data()),
+                             reply.size());
+            }
+            return true;
+        }
         std::lock_guard<std::mutex> lock(mutex_);
         int& fd = message.channel == Channel::Control ? control_ : update_;
         const uint16_t port = message.channel == Channel::Control ? 8555 : 8557;
@@ -323,7 +353,9 @@ public:
         // on that would eat the first chunk of the next upload.
         for (int attempt = 0; attempt < 2; ++attempt) {
             if (fd < 0)
-                fd = connect_local(port);
+                fd = (message.channel == Channel::Update && open_update_)
+                         ? open_update_()      // in-process socketpair
+                         : connect_local(port);  // legacy loopback
             if (fd < 0)
                 break;
             if (endpoint_write_all(fd, message.payload.data(),
@@ -402,6 +434,9 @@ private:
 
     std::atomic<bool>& dead_;
     Enqueue enqueue_;
+    Dispatch dispatch_;
+    OpenUpdate open_update_;
+    std::string control_buffer_;  // reassembles newline-delimited requests
     std::mutex mutex_;
     int control_ = -1;
     int update_ = -1;
@@ -410,11 +445,14 @@ private:
 // One authenticated session: a thin coordinator over the outbound writer, the
 // local control/update tunnel, and the host-silence watchdog.
 struct Session {
-    Session(int endpoint, const SecureRecord::Key& key, const SecureRecord::Iv& iv)
+    Session(int endpoint, const SecureRecord::Key& key, const SecureRecord::Iv& iv,
+            LocalTunnel::Dispatch dispatch, LocalTunnel::OpenUpdate open_update)
         : writer_(endpoint, key, iv, dead),
-          tunnel_(dead, [this](Channel c, const uint8_t* d, size_t n) {
-              return writer_.enqueue(c, 0, d, n, /*droppable=*/false);
-          }) {}
+          tunnel_(dead,
+                  [this](Channel c, const uint8_t* d, size_t n) {
+                      return writer_.enqueue(c, 0, d, n, /*droppable=*/false);
+                  },
+                  std::move(dispatch), std::move(open_update)) {}
 
     std::atomic<bool> dead{false};
 
@@ -480,8 +518,25 @@ private:
 // thread so inference never blocks the video path; boxes are droppable.
 void detection_loop(Session& session, uint8_t camera, GstAppSink* detect,
                     detect::IFaceDetector& detector,
-                    const std::atomic<bool>& stop) {
+                    const std::atomic<bool>& stop, int detect_fps) {
+    // Pace the pulls. The appsink blocks rather than dropping (drop=false), so
+    // not pulling is what stops nvvidconv converting -- the wait below is the
+    // thing that actually keeps VIC and the GPU idle between detections.
+    const auto interval = detect_fps > 0
+                              ? std::chrono::milliseconds(1000 / detect_fps)
+                              : std::chrono::milliseconds(0);
+    auto next = std::chrono::steady_clock::now();
     while (!session.dead && !stop) {
+        if (interval.count() > 0) {
+            next += interval;
+            const auto now = std::chrono::steady_clock::now();
+            if (now < next) {
+                std::this_thread::sleep_for(next - now);
+            } else {
+                next = now;  // fell behind; do not accumulate a burst debt
+            }
+            if (session.dead || stop) break;
+        }
         GstSample* sample = gst_app_sink_try_pull_sample(detect, 200 * GST_MSECOND);
         if (sample == nullptr) continue;
         int w = 0, h = 0;
@@ -529,9 +584,12 @@ void detection_loop(Session& session, uint8_t camera, GstAppSink* detect,
 // Pulls one camera's encoded H.265 elementary stream and pushes it over the
 // session. When `detect_model` is set the pipeline also carries a raw branch,
 // and a detection_loop thread runs face detection alongside.
-void video_loop(Session& session, uint8_t camera, const std::string& description,
+void video_loop(Session& session, uint8_t camera,
+                const std::function<std::string()>& describe,
                 const std::atomic<bool>& enabled, const std::string& detect_model,
-                int detect_w, int detect_h, double detect_score) {
+                int detect_w, int detect_h, double detect_score, int detect_fps,
+                std::atomic<bool>& relaunch,
+                const std::function<void(uint8_t, void*)>& publish) {
     // Load the detector once for the camera's lifetime (model load is heavy).
     std::unique_ptr<detect::IFaceDetector> detector;
     if (!detect_model.empty()) {
@@ -557,6 +615,10 @@ void video_loop(Session& session, uint8_t camera, const std::string& description
             usleep(200000);
             continue;
         }
+        // Re-read each time: refresh_launch can have replaced it (zoom, and
+        // any setting the live element cannot take).
+        const std::string description = describe();
+        relaunch = false;
         Pipeline pipeline;
         std::string error;
         bool produced = false;
@@ -585,13 +647,17 @@ void video_loop(Session& session, uint8_t camera, const std::string& description
             if (detector && pipeline.detect != nullptr) {
                 detect_thread = std::thread([&] {
                     detection_loop(session, camera, pipeline.detect, *detector,
-                                   detect_stop);
+                                   detect_stop, detect_fps);
                 });
             }
             SCOPE_EXIT {
                 detect_stop = true;
                 if (detect_thread.joinable()) detect_thread.join();
             };
+            // Expose the source while this pipeline lives, so the control
+            // server can set exposure/gain on it.
+            publish(camera, pipeline.camsrc);
+            SCOPE_EXIT { publish(camera, nullptr); };
             size_t total = 0, reported = 0;
             while (!session.dead) {
                 // Bounded pull so session teardown is noticed promptly even
@@ -600,6 +666,11 @@ void video_loop(Session& session, uint8_t camera, const std::string& description
                     XLOGF(INFO, "secure-usb: cam%u stream stopped by set-stream",
                           static_cast<unsigned>(camera));
                     break;  // ~Pipeline releases the sensor
+                }
+                if (relaunch) {
+                    XLOGF(INFO, "secure-usb: cam%u rebuilding pipeline "
+                                "(launch changed)", static_cast<unsigned>(camera));
+                    break;  // outer loop re-reads the description
                 }
                 GstSample* sample = gst_app_sink_try_pull_sample(
                     pipeline.sink, 200 * GST_MSECOND);
@@ -705,13 +776,55 @@ void SecureUsbServer::stop() {
     }
 }
 
+void SecureUsbServer::set_control_dispatcher(ControlDispatcher dispatcher) {
+    control_dispatcher_ = std::move(dispatcher);
+}
+
+void SecureUsbServer::set_update_channel_factory(UpdateChannelFactory factory) {
+    update_channel_factory_ = std::move(factory);
+}
+
+void SecureUsbServer::publish_source(uint8_t camera, void* element) {
+    if (camera >= kCameras) return;
+    std::lock_guard<std::mutex> lock(live_mutex_);
+    if (live_source_[camera] != nullptr)
+        gst_object_unref(static_cast<GstElement*>(live_source_[camera]));
+    // Hold our own ref: the pipeline that owns it can be torn down while the
+    // control server is mid-call.
+    live_source_[camera] =
+        element != nullptr ? gst_object_ref(static_cast<GstElement*>(element))
+                           : nullptr;
+}
+
+bool SecureUsbServer::set_source_property(uint8_t camera, const char* property,
+                                          const char* value) {
+    if (camera >= kCameras) return false;
+    std::lock_guard<std::mutex> lock(live_mutex_);
+    auto* src = static_cast<GstElement*>(live_source_[camera]);
+    if (src == nullptr)
+        return false;  // no pipeline up; the launch string carries it instead
+    gst_util_set_object_arg(G_OBJECT(src), property, value);
+    return true;
+}
+
+void SecureUsbServer::refresh_launch(uint8_t camera, std::string launch) {
+    if (camera >= kCameras || launch.empty()) return;
+    if (camera < video_launch_.size())
+        video_launch_[camera] = std::move(launch);
+    // Ask the video loop to rebuild. A live session picks it up within one
+    // pull timeout; with no session the next one reads the new string.
+    relaunch_[camera] = true;
+}
+
 void SecureUsbServer::set_face_detection(std::string model, int input_width,
                                          int input_height,
-                                         double score_threshold) {
+                                         double score_threshold,
+                                         int detect_fps) {
     detect_model_ = std::move(model);
     detect_width_ = input_width;
     detect_height_ = input_height;
     detect_score_ = score_threshold;
+    detect_fps_ = detect_fps;
 }
 
 std::string SecureUsbServer::video_description(uint8_t camera) const {
@@ -848,18 +961,24 @@ void SecureUsbServer::serve_session(int ep0) {
                 }
                 decrypt = std::make_unique<SecureRecord>(
                     response.value().second.host_key, response.value().second.host_iv);
-                session = std::make_unique<Session>(in,
-                                                    response.value().second.device_key,
-                                                    response.value().second.device_iv);
+                session = std::make_unique<Session>(
+                    in, response.value().second.device_key,
+                    response.value().second.device_iv, control_dispatcher_,
+                    update_channel_factory_);
                 session->last_inbound_ms = Session::now_ms();
                 XLOGF(INFO, "secure-usb: authenticated session established");
                 Session* raw = session.get();
                 for (uint8_t camera = 0; camera < kCameras; ++camera) {
                     workers.emplace_back([this, raw, camera] {
-                        video_loop(*raw, camera, video_description(camera),
-                                   stream_enabled_[camera], detect_model_,
-                                   detect_width_, detect_height_,
-                                   detect_score_);
+                        video_loop(
+                            *raw, camera,
+                            [this, camera] { return video_description(camera); },
+                            stream_enabled_[camera], detect_model_,
+                            detect_width_, detect_height_, detect_score_, detect_fps_,
+                            relaunch_[camera],
+                            [this](uint8_t cam, void* element) {
+                                publish_source(cam, element);
+                            });
                     });
                 }
                 workers.emplace_back([raw] { raw->pump_tunnel(); });

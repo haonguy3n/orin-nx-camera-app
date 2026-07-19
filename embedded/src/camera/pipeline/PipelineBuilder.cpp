@@ -68,6 +68,15 @@ std::string PipelineBuilder::detect_branch(int width, int height) {
     // a plain colour converter cannot rescale, so width/height must ride on
     // nvvidconv's output caps.
     //
+    // drop=false is deliberate and is what keeps the sensor cool. With
+    // drop=true the appsink accepts every frame and throws it away, so
+    // nvvidconv scaled and downloaded all 60 fps regardless of how often the
+    // detector actually looked -- measured on target as VIC ~70% and GR3D
+    // ~40% continuously. Blocking instead means nvvidconv only converts when
+    // the detector takes a frame, so the branch costs what detection actually
+    // uses. Video is unaffected: the leaky queue above drops rather than
+    // backpressuring the tee, which is why that queue is load-bearing here.
+    //
     // async=false is what makes the leaky queue above safe. A sink normally
     // gates the pipeline's async state change until it prerolls one buffer --
     // but leaky=downstream drops exactly that buffer, so this appsink never
@@ -87,7 +96,7 @@ std::string PipelineBuilder::detect_branch(int width, int height) {
            ",width=" + std::to_string(width) +
            ",height=" + std::to_string(height) +
            " ! appsink name=detect sync=false async=false"
-           " max-buffers=1 drop=true";
+           " max-buffers=1 drop=false";
 }
 
 std::string PipelineBuilder::zoom_crop(const CameraConfig& cam) {

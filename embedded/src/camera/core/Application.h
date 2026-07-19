@@ -21,6 +21,7 @@
 #include "camera/discovery/DiscoveryServer.h"
 #include "camera/pipeline/SourceFactory.h"
 #include "camera/rtsp/RtspServer.h"
+#include "camera/core/StreamController.h"
 #include "camera/update/SwupdateClient.h"
 #include "camera/update/UpdateServer.h"
 #ifdef ENABLE_SECURE_USB
@@ -66,6 +67,13 @@ private:
 
     // Servers (recreated on reload).
     std::unique_ptr<RtspServer> rtsp_;
+    // Fans runtime settings to the USB pipeline as well as RTSP; must
+    // outlive control_, which holds a reference to it.
+    std::unique_ptr<IStreamController> stream_controller_;
+    // Owned so the secure-USB in-process dispatcher can use the same
+    // context as the TCP control server (it holds references, so both
+    // see identical state).
+    std::unique_ptr<ControlContext> control_context_;
     std::unique_ptr<ControlServer> control_;
     std::unique_ptr<DiscoveryServer> discovery_;
     std::unique_ptr<UpdateServer> update_server_;

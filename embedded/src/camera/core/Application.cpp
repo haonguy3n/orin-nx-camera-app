@@ -2,9 +2,16 @@
 
 #include <glib-unix.h>
 #include <gst/gst.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
+#include <cerrno>
+#include <cstring>
+
+#include <condition_variable>
+#include <functional>
 #include <memory>
+#include <mutex>
 
 #include "camera/control/ControlServer.h"
 #include "camera/control/handlers/RegisterHandlers.h"
@@ -12,6 +19,9 @@
 #include "camera/pipeline/PipelineBuilder.h"
 #include "camera/pipeline/SourceFactory.h"
 #include "camera/lib/v4l2/V4l2Factory.h"
+#ifdef ENABLE_SECURE_USB
+#include "camera/core/UsbAwareStreamController.h"
+#endif
 
 #include "camera/base/logging/xlog.h"
 
@@ -68,6 +78,42 @@ std::string usb_video_launch(ISourceFactory& factory, const CameraConfig& cam,
     return launch;
 }
 
+// Runs `work` on the GLib main loop and waits for it.
+//
+// Control handlers mutate the config and poke live GStreamer elements, so they
+// must not run on a secure-USB session thread. The old loopback socket gave
+// that for free (GSocket callbacks land on the main loop); dispatching
+// in-process has to arrange it deliberately, or handlers race the video
+// threads.
+std::string run_on_main_loop(const std::function<std::string()>& work) {
+    struct Job {
+        const std::function<std::string()>* work;
+        std::string result;
+        std::mutex mutex;
+        std::condition_variable done;
+        bool finished = false;
+    } job{&work, {}, {}, {}, false};
+
+    g_main_context_invoke_full(
+        nullptr, G_PRIORITY_DEFAULT,
+        [](gpointer data) -> gboolean {
+            auto* j = static_cast<Job*>(data);
+            std::string out = (*j->work)();
+            {
+                std::lock_guard<std::mutex> lock(j->mutex);
+                j->result = std::move(out);
+                j->finished = true;
+            }
+            j->done.notify_one();
+            return G_SOURCE_REMOVE;
+        },
+        &job, nullptr);
+
+    std::unique_lock<std::mutex> lock(job.mutex);
+    job.done.wait(lock, [&job] { return job.finished; });
+    return std::move(job.result);
+}
+
 }  // namespace
 
 Application::Application(std::string conf_path)
@@ -103,10 +149,26 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
         return r;
     }
 
-    if (config_.control_port > 0) {
-        ControlContext ctx{
+    // Runtime settings must reach whichever pipeline is actually serving. With
+    // transports=usb the RTSP pipeline is never instantiated, so a plain
+    // RtspServer controller made set-exposure/set-gain/set-zoom no-ops.
+#ifdef ENABLE_SECURE_USB
+    stream_controller_ = std::make_unique<UsbAwareStreamController>(
+        *rtsp_, [this] { return secure_usb_.get(); },
+        [this](int cam) {
+            return cam >= 0 && cam < Config::kNumCameras
+                       ? usb_video_launch(*source_factory_,
+                                          config_.cameras[cam], config_)
+                       : std::string();
+        });
+#endif
+    IStreamController& stream_for_handlers =
+        stream_controller_ ? *stream_controller_
+                           : static_cast<IStreamController&>(*rtsp_);
+
+    control_context_ = std::make_unique<ControlContext>(ControlContext{
             config_,
-            *rtsp_,
+            stream_for_handlers,
             *v4l2_factory_,
             *source_factory_,
             swupdate_,
@@ -121,9 +183,11 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
                 (void)enabled;
 #endif
             },
-        };
+    });
+
+    if (config_.control_port > 0) {
         control_ = std::make_unique<ControlServer>(registry_,
-                                                    std::move(ctx));
+                                                    *control_context_);
         if (auto r = control_->start(rtsp_->bound_address(),
                                      config_.control_port);
             !r) {
@@ -208,13 +272,48 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
                 detect_height_for(config_.cameras[0], config_.detect_width);
             secure_usb_->set_face_detection(config_.detect_model,
                                             config_.detect_width, detect_h,
-                                            config_.detect_score);
-            XLOGF(INFO, "face detection enabled: %s (%dx%d, score>=%.2f)",
+                                            config_.detect_score,
+                                            config_.detect_fps);
+            XLOGF(INFO,
+                  "face detection enabled: %s (%dx%d, score>=%.2f, %d fps)",
                   config_.detect_model.c_str(), config_.detect_width,
-                  detect_h, config_.detect_score);
+                  detect_h, config_.detect_score, config_.detect_fps);
         } else if (usb_only && !config_.detect_model.empty()) {
             XLOGF(INFO, "face detection off: model not found at %s",
                   config_.detect_model.c_str());
+        }
+        // Control in-process: no loopback socket for Channel::Control. The
+        // context must be the same one the TCP server uses, so both paths see
+        // identical state; control_context_ owns it for the process lifetime.
+        if (control_context_) {
+            ControlContext* ctx = control_context_.get();
+            ControlRegistry* registry = &registry_;
+            secure_usb_->set_control_dispatcher(
+                [ctx, registry](const std::string& line) {
+                    return run_on_main_loop([ctx, registry, &line] {
+                        return dispatch_request(*registry, *ctx, line.c_str());
+                    });
+                });
+        }
+        // Update in-process: an anonymous socketpair replaces the TCP
+        // connection to 127.0.0.1:8557. The far end is adopted by the update
+        // server and runs its normal handler, so upload behaviour (including
+        // close() meaning end-of-upload) is unchanged -- only the transport
+        // underneath it is, which is the point: nothing on the network stack.
+        if (update_server_) {
+            UpdateServer* server = update_server_.get();
+            secure_usb_->set_update_channel_factory([server]() -> int {
+                int pair[2] = {-1, -1};
+                if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) {
+                    XLOGF(WARN, "update: socketpair failed: %s", strerror(errno));
+                    return -1;
+                }
+                if (!server->adopt_fd(pair[0])) {  // takes ownership of pair[0]
+                    close(pair[1]);
+                    return -1;
+                }
+                return pair[1];  // tunnel writes the upload here
+            });
         }
         std::string secure_error;
         if (!secure_usb_->start(&secure_error)) {

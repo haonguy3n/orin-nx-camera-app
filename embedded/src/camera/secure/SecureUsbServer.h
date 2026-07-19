@@ -1,6 +1,8 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,11 +30,42 @@ public:
     // `model` is the YuNet .onnx path; empty (default) leaves detection off.
     // Must be called before start().
     void set_face_detection(std::string model, int input_width, int input_height,
-                            double score_threshold);
+                            double score_threshold, int detect_fps);
     // set-stream: starts/stops one camera's video push without touching the
     // session. Off = the video loop parks and its pipeline (and sensor) is
     // released; on = it respawns within ~200 ms.
     void set_stream_enabled(uint8_t camera, bool enabled);
+
+    // Dispatches one control request line and returns the reply line. Set by
+    // the application; when present, Channel::Control records are handled
+    // IN-PROCESS instead of being written to a loopback TCP server. The
+    // implementation is responsible for running on the GLib main loop.
+    using ControlDispatcher = std::function<std::string(const std::string&)>;
+    void set_control_dispatcher(ControlDispatcher dispatcher);
+
+    // Opens an in-process channel to the update server and returns the
+    // writable end, or -1. Set by the application; when present, Update
+    // records go through an anonymous socketpair instead of a TCP connection
+    // to 127.0.0.1:8557 -- same fd semantics (close = end of upload), nothing
+    // on the network stack.
+    using UpdateChannelFactory = std::function<int()>;
+    void set_update_channel_factory(UpdateChannelFactory factory);
+
+    // Runtime control of the USB pipeline, mirroring what IStreamController
+    // does for the RTSP mounts. Without these, set-exposure/set-gain/set-zoom
+    // reached only the RTSP pipeline -- which transports=usb never even
+    // instantiates -- so they silently did nothing.
+
+    // Poke a property on the live nvarguscamerasrc (argus forwards its range
+    // properties while streaming). False when no pipeline is up for `camera`.
+    bool set_source_property(uint8_t camera, const char* property,
+                             const char* value);
+
+    // Replace the launch description and ask the running pipeline to rebuild
+    // with it. Needed for anything the source cannot change live (zoom is a
+    // crop on nvvidconv), and so later sessions do not revert: the old
+    // description was frozen at construction.
+    void refresh_launch(uint8_t camera, std::string launch);
 
 private:
     void run();
@@ -44,15 +77,26 @@ private:
     // Direct encoder tap when configured, otherwise the camera's local RTSP
     // mount.
     std::string video_description(uint8_t camera) const;
+    // Publishes/clears the live source for set_source_property.
+    void publish_source(uint8_t camera, void* element);
 
     std::string certificate_;
     std::string private_key_;
     std::vector<std::string> video_launch_;
+    ControlDispatcher control_dispatcher_;
+    UpdateChannelFactory update_channel_factory_;
     std::string detect_model_;
     int detect_width_ = 320;
     double detect_score_ = 0.45;
+    int detect_fps_ = 10;
     int detect_height_ = 320;
     std::atomic<bool> stream_enabled_[2] = {{true}, {true}};
+    // Live source element per camera, published by the video loop while its
+    // pipeline is up. Guarded because the control server pokes it from the
+    // GLib main thread while the video loop replaces it.
+    mutable std::mutex live_mutex_;
+    void* live_source_[2] = {nullptr, nullptr};  // GstElement*, ref held
+    std::atomic<bool> relaunch_[2] = {{false}, {false}};
     std::atomic<bool> stopping_{false};
     std::atomic<bool> worker_exited_{false};
     std::thread worker_;

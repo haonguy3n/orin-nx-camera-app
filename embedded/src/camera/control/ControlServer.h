@@ -19,6 +19,18 @@
 
 namespace camera {
 
+// Runs one request line through the handlers and returns the reply line
+// (empty for a blank request). Exposed so a transport can dispatch in-process:
+// the secure USB path used to re-serialise every decrypted request onto a TCP
+// socket to 127.0.0.1:8555 just to reach these same handlers.
+//
+// Handlers touch the config and live GStreamer elements, so this MUST be
+// called on the GLib main loop -- see Application's dispatcher, which marshals
+// onto it. The TCP server satisfied that incidentally (GSocket callbacks land
+// there); an in-process caller has to do it deliberately.
+std::string dispatch_request(ControlRegistry& registry, ControlContext& context,
+                             const char* line);
+
 class ControlServer {
 public:
     ControlServer(ControlRegistry& registry, ControlContext context);

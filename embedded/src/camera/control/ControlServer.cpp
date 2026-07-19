@@ -137,9 +137,13 @@ void ControlServer::on_line(GObject* source, GAsyncResult* result,
                                         conn->cancellable, on_line, conn);
 }
 
-void ControlServer::process_line(Conn* conn, const char* line) {
+// Request line -> reply line. Shared by the TCP control server and the
+// secure-USB transport, which dispatches in-process instead of looping a
+// socket back to 127.0.0.1 just to reach the same handlers.
+std::string dispatch_request(ControlRegistry& registry_,
+                             ControlContext& context_, const char* line) {
     if (*line == '\0')
-        return;  // ignore blank lines (nc users)
+        return {};  // blank lines (nc users) get no reply
 
     JsonNode* id = nullptr;      // borrowed from the parsed tree
     JsonNode* res = nullptr;     // transfer full
@@ -222,6 +226,12 @@ void ControlServer::process_line(Conn* conn, const char* line) {
     json_node_unref(reply);
     g_object_unref(parser);
 
+    return out;
+}
+void ControlServer::process_line(Conn* conn, const char* line) {
+    const std::string out = dispatch_request(registry_, context_, line);
+    if (out.empty())
+        return;
     g_output_stream_write_all(
         g_io_stream_get_output_stream(conn->io), out.data(),
         out.size(), nullptr, nullptr, nullptr);
