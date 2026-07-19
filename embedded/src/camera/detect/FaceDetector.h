@@ -32,7 +32,8 @@ class IFaceDetector {
 public:
     virtual ~IFaceDetector() = default;
 
-    // Detect faces in a packed BGR image. Returned boxes are scaled to
+    // Detect faces in a packed BGRx image (4 bytes per pixel, as
+    // nvvidconv emits). Returned boxes are scaled to
     // (frame_width, frame_height) so callers work in full-frame coordinates
     // regardless of the model's own input resolution.
     virtual std::vector<FaceBox> detect(const uint8_t* bgr, int frame_width,

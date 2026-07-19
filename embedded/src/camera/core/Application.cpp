@@ -207,10 +207,11 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
             const int detect_h =
                 detect_height_for(config_.cameras[0], config_.detect_width);
             secure_usb_->set_face_detection(config_.detect_model,
-                                            config_.detect_width, detect_h);
-            XLOGF(INFO, "face detection enabled: %s (%dx%d)",
+                                            config_.detect_width, detect_h,
+                                            config_.detect_score);
+            XLOGF(INFO, "face detection enabled: %s (%dx%d, score>=%.2f)",
                   config_.detect_model.c_str(), config_.detect_width,
-                  detect_h);
+                  detect_h, config_.detect_score);
         } else if (usb_only && !config_.detect_model.empty()) {
             XLOGF(INFO, "face detection off: model not found at %s",
                   config_.detect_model.c_str());

@@ -30,6 +30,7 @@
 #include "camera/base/ScopeGuard.h"
 #include "camera/base/logging/xlog.h"
 #include "camera/detect/FaceDetector.h"
+#include "camera/detect/Snapshot.h"
 #include "camera/secure/FfsGadget.h"
 #include "secure/SecureHandshake.h"
 #include "secure/SecureWire.h"
@@ -128,7 +129,17 @@ struct Pipeline {
             if (failure != nullptr) g_error_free(failure);
             return false;
         }
-        if (failure != nullptr) g_error_free(failure);
+        // gst_parse_launch can return a pipeline AND a non-fatal error: an
+        // element it could not create, or a property it could not set, with
+        // that part of the graph quietly omitted. Discarding this error is how
+        // a missing detect branch became invisible -- video kept working
+        // because "sink" was still there, while nothing said the detect leg
+        // had been dropped on the floor.
+        if (failure != nullptr) {
+            XLOGF(WARN, "secure-usb: pipeline built with warnings: %s",
+                  failure->message);
+            g_error_free(failure);
+        }
         GstElement* raw = gst_bin_get_by_name(GST_BIN(element), "sink");
         if (raw == nullptr) {
             *error = "pipeline has no appsink";
@@ -485,6 +496,26 @@ void detection_loop(Session& session, uint8_t camera, GstAppSink* detect,
             && gst_buffer_map(buffer, &map, GST_MAP_READ)) {
             const int stride = static_cast<int>(map.size) / h;
             const auto boxes = detector.detect(map.data, w, h, stride);
+            // Serve a pending ISP snapshot from this same frame. Done here
+            // because Argus allows one consumer per camera: nothing outside
+            // this process can open the sensor while the service runs, and
+            // stopping the service to free it would unbind the USB gadget.
+            if (const std::string path =
+                    detect::take_snapshot_request(camera);
+                !path.empty()) {
+                const std::string failure =
+                    detect::write_bgr_ppm(path, map.data, w, h, stride,
+                                          /*bytes_per_pixel=*/4, boxes);
+                if (failure.empty())
+                    XLOGF(INFO,
+                          "secure-usb: cam%u snapshot written to %s "
+                          "(%zu face(s) in this frame)",
+                          static_cast<unsigned>(camera), path.c_str(),
+                          boxes.size());
+                else
+                    XLOGF(WARN, "secure-usb: cam%u snapshot failed: %s",
+                          static_cast<unsigned>(camera), failure.c_str());
+            }
             gst_buffer_unmap(buffer, &map);
             const std::string json = detect::to_meta_json(camera, w, h, boxes);
             session.enqueue(Channel::Meta, camera,
@@ -500,11 +531,12 @@ void detection_loop(Session& session, uint8_t camera, GstAppSink* detect,
 // and a detection_loop thread runs face detection alongside.
 void video_loop(Session& session, uint8_t camera, const std::string& description,
                 const std::atomic<bool>& enabled, const std::string& detect_model,
-                int detect_w, int detect_h) {
+                int detect_w, int detect_h, double detect_score) {
     // Load the detector once for the camera's lifetime (model load is heavy).
     std::unique_ptr<detect::IFaceDetector> detector;
     if (!detect_model.empty()) {
-        auto d = detect::create_face_detector(detect_model, detect_w, detect_h);
+        auto d = detect::create_face_detector(detect_model, detect_w, detect_h,
+                                              static_cast<float>(detect_score));
         if (d.hasValue())
             detector = std::move(d.value());
         else
@@ -537,6 +569,19 @@ void video_loop(Session& session, uint8_t camera, const std::string& description
             // branch down.
             std::atomic<bool> detect_stop{false};
             std::thread detect_thread;
+            // Say which of the two preconditions failed. Both used to be
+            // silent, so "detection is on" in the config could sit next to a
+            // pipeline that had no detect branch at all -- video streaming
+            // perfectly the whole time, and nothing in the log to say why no
+            // boxes (or snapshots) ever appeared.
+            if (detector == nullptr)
+                XLOGF(WARN, "secure-usb: cam%u no detector; detection off",
+                      static_cast<unsigned>(camera));
+            else if (pipeline.detect == nullptr)
+                XLOGF(WARN,
+                      "secure-usb: cam%u pipeline has no 'detect' appsink; "
+                      "detection off (launch: %s)",
+                      static_cast<unsigned>(camera), description.c_str());
             if (detector && pipeline.detect != nullptr) {
                 detect_thread = std::thread([&] {
                     detection_loop(session, camera, pipeline.detect, *detector,
@@ -661,10 +706,12 @@ void SecureUsbServer::stop() {
 }
 
 void SecureUsbServer::set_face_detection(std::string model, int input_width,
-                                         int input_height) {
+                                         int input_height,
+                                         double score_threshold) {
     detect_model_ = std::move(model);
     detect_width_ = input_width;
     detect_height_ = input_height;
+    detect_score_ = score_threshold;
 }
 
 std::string SecureUsbServer::video_description(uint8_t camera) const {
@@ -673,6 +720,14 @@ std::string SecureUsbServer::video_description(uint8_t camera) const {
     // Fallback: the RTSP server owns the sensor, so take the frames back off
     // its local mount. Costs an RTP payload/depayload round trip through
     // loopback, which is why it is not used when we can tap the encoder.
+    //
+    // Worth a line in the log: this path has no detect branch, so falling back
+    // silently disables face detection (and snapshots) while video keeps
+    // working perfectly -- an easy failure to misread as "detection is broken".
+    XLOGF(WARN,
+          "secure-usb: cam%u has no direct launch; falling back to the RTSP "
+          "re-serve (no detect branch, so no face detection or snapshots)",
+          static_cast<unsigned>(camera));
     return "rtspsrc location=rtsp://127.0.0.1:8554/cam" + std::to_string(camera) +
            " protocols=tcp latency=0"
            " ! rtph265depay ! h265parse config-interval=-1"
@@ -803,7 +858,8 @@ void SecureUsbServer::serve_session(int ep0) {
                     workers.emplace_back([this, raw, camera] {
                         video_loop(*raw, camera, video_description(camera),
                                    stream_enabled_[camera], detect_model_,
-                                   detect_width_, detect_height_);
+                                   detect_width_, detect_height_,
+                                   detect_score_);
                     });
                 }
                 workers.emplace_back([raw] { raw->pump_tunnel(); });

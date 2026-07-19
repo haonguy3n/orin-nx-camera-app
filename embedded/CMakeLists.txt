@@ -94,6 +94,8 @@ if(ENABLE_SECURE_USB)
         src/camera/secure/FfsGadget.cpp
         src/camera/secure/SecureUsbServer.cpp
         src/camera/detect/FaceDetector.cpp
+        src/camera/detect/Snapshot.cpp
+        src/camera/control/handlers/SnapshotHandler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureHandshake.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../common/secure/SecureWire.cpp)
     target_include_directories(camera-streamer PRIVATE ${OpenCV_INCLUDE_DIRS})

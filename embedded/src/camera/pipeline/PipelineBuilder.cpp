@@ -55,8 +55,8 @@ std::string PipelineBuilder::appsink_tail(const CameraConfig& cam) {
 }
 
 std::string PipelineBuilder::detect_branch(int width, int height) {
-    // NVMM -> CPU BGRx via nvvidconv, then BGR for OpenCV. Named "detect" so
-    // Pipeline can find the appsink.
+    // NVMM -> CPU BGRx via nvvidconv, straight into the appsink. Named
+    // "detect" so Pipeline can find it.
     //
     // leaky=downstream on this queue is essential, not cosmetic: without it a
     // slow detector (YuNet warmup, inference) fills the queue and backpressures
@@ -64,10 +64,9 @@ std::string PipelineBuilder::detect_branch(int width, int height) {
     // actually watches. Leaky drops old frames on this branch so detection is
     // best-effort and can never block video. max-size-buffers=1 also keeps
     // Argus NVMM buffers from being held here.
-    // Scale on nvvidconv, NOT videoconvert: videoconvert only changes pixel
-    // format and cannot rescale, so putting width/height on its output caps
-    // fails negotiation and breaks the whole tee. nvvidconv does the resize
-    // (and the NVMM->CPU download); videoconvert then only BGRx->BGR.
+    // nvvidconv does the resize as well as the NVMM->CPU download. It has to:
+    // a plain colour converter cannot rescale, so width/height must ride on
+    // nvvidconv's output caps.
     //
     // async=false is what makes the leaky queue above safe. A sink normally
     // gates the pipeline's async state change until it prerolls one buffer --
@@ -76,11 +75,17 @@ std::string PipelineBuilder::detect_branch(int width, int height) {
     // encode branch either, and teardown of a stuck pipeline is what makes
     // restarts crawl. async=false takes this sink out of the state change, so
     // the detect branch can stall or drop freely without touching video.
+    // No videoconvert: it is NOT in the device image (only the nv* GStreamer
+    // plugin packages are installed), and gst_parse_launch answers a missing
+    // element with a PARTIAL pipeline plus a non-fatal error -- so this whole
+    // branch was being dropped while "sink" survived. Video streamed perfectly
+    // and detection silently never ran. nvvidconv emits system-memory BGRx by
+    // itself, so the branch ends at the appsink and the detector drops the
+    // padding byte (cheaper than a CPU colour conversion anyway).
     return "queue leaky=downstream max-size-buffers=1"
            " ! nvvidconv ! video/x-raw,format=BGRx"
            ",width=" + std::to_string(width) +
            ",height=" + std::to_string(height) +
-           " ! videoconvert ! video/x-raw,format=BGR"
            " ! appsink name=detect sync=false async=false"
            " max-buffers=1 drop=true";
 }

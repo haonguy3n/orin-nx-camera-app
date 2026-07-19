@@ -27,7 +27,8 @@ public:
     // branch and a detection thread that emits boxes over Channel::Meta.
     // `model` is the YuNet .onnx path; empty (default) leaves detection off.
     // Must be called before start().
-    void set_face_detection(std::string model, int input_width, int input_height);
+    void set_face_detection(std::string model, int input_width, int input_height,
+                            double score_threshold);
     // set-stream: starts/stops one camera's video push without touching the
     // session. Off = the video loop parks and its pipeline (and sensor) is
     // released; on = it respawns within ~200 ms.
@@ -49,6 +50,7 @@ private:
     std::vector<std::string> video_launch_;
     std::string detect_model_;
     int detect_width_ = 320;
+    double detect_score_ = 0.45;
     int detect_height_ = 320;
     std::atomic<bool> stream_enabled_[2] = {{true}, {true}};
     std::atomic<bool> stopping_{false};

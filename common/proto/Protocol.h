@@ -40,6 +40,8 @@ constexpr const char* kSetIsp = "set-isp";
 constexpr const char* kListControls = "list-controls";
 constexpr const char* kGetControl = "get-control";
 constexpr const char* kSetControl = "set-control";
+// Writes one frame from the detection branch to disk, for ISP debugging.
+constexpr const char* kSnapshot = "snapshot";
 // Sent by host-ui's white-balance calibrator but NOT implemented by the
 // device yet (answers kUnknownMethod) — drift found when this header was
 // created. Implement device-side or drop the host call.

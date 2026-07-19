@@ -111,6 +111,13 @@ struct Config {
     // camera's aspect ratio, because squashing the frame to a fixed shape
     // distorts faces and YuNet then misses them.
     int detect_width = 320;
+    // Minimum YuNet confidence for a face to be reported. Reference figures
+    // (same frame + same model replayed on a dev host, NOT the device's
+    // CUDA runtime, so treat as indicative): with the corrected ISP
+    // (opticalBlack=120) real faces scored 0.52-0.72; the same scene before
+    // the ISP fix scored 0.32. The old built-in 0.6 rejected everything
+    // pre-fix and still clips the weaker half of real detections.
+    double detect_score = 0.45;
 
     CameraConfig cameras[kNumCameras];
 };

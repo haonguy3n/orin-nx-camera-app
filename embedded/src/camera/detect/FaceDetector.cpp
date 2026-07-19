@@ -41,8 +41,13 @@ public:
                                 int frame_height, int stride) override {
         std::vector<FaceBox> boxes;
         try {
-            const cv::Mat frame(frame_height, frame_width, CV_8UC3,
-                                const_cast<uint8_t*>(bgr), static_cast<size_t>(stride));
+            // nvvidconv hands us BGRx: 4 bytes per pixel with a padding
+            // byte. Drop it here rather than with a videoconvert element,
+            // which is not in the device image.
+            const cv::Mat bgrx(frame_height, frame_width, CV_8UC4,
+                               const_cast<uint8_t*>(bgr), static_cast<size_t>(stride));
+            cv::cvtColor(bgrx, frame_, cv::COLOR_BGRA2BGR);
+            const cv::Mat& frame = frame_;
             // Detect at the frame's own size rather than resizing to a fixed
             // input. The pipeline already scales to the detector's working
             // resolution preserving the camera's aspect ratio, so resizing
@@ -62,10 +67,10 @@ public:
                 // Row layout: x, y, w, h, [5 landmarks], score.
                 const float* row = faces.ptr<float>(i);
                 FaceBox box;
-                box.x = static_cast<int>(row[0] * sx);
-                box.y = static_cast<int>(row[1] * sy);
-                box.w = static_cast<int>(row[2] * sx);
-                box.h = static_cast<int>(row[3] * sy);
+                box.x = static_cast<int>(row[0]);
+                box.y = static_cast<int>(row[1]);
+                box.w = static_cast<int>(row[2]);
+                box.h = static_cast<int>(row[3]);
                 box.score = row[faces.cols - 1];
                 boxes.push_back(box);
             }
@@ -80,6 +85,7 @@ public:
 private:
     cv::Ptr<cv::FaceDetectorYN> yunet_;
     cv::Size input_;
+    cv::Mat frame_;  // BGRx -> BGR scratch, reused across frames
 };
 
 }  // namespace
