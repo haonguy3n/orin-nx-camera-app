@@ -51,6 +51,17 @@ public:
     using UpdateChannelFactory = std::function<int()>;
     void set_update_channel_factory(UpdateChannelFactory factory);
 
+    // Live per-camera state, so get-status can report the transport that is
+    // actually serving. Without this, usb mode reports an empty status: the
+    // only IStreamController was RtspServer, and usb mode no longer builds one.
+    struct CameraStats {
+        bool streaming = false;
+        uint64_t frames = 0;
+        uint64_t bytes = 0;
+        double fps = 0.0;
+    };
+    [[nodiscard]] CameraStats stats(uint8_t camera) const;
+
     // Runtime control of the USB pipeline, mirroring what IStreamController
     // does for the RTSP mounts. Without these, set-exposure/set-gain/set-zoom
     // reached only the RTSP pipeline -- which transports=usb never even
@@ -79,6 +90,8 @@ private:
     std::string video_description(uint8_t camera) const;
     // Publishes/clears the live source for set_source_property.
     void publish_source(uint8_t camera, void* element);
+    // Called per frame by the video loops.
+    void report_frame(uint8_t camera, bool streaming, size_t bytes);
 
     std::string certificate_;
     std::string private_key_;
@@ -97,6 +110,11 @@ private:
     mutable std::mutex live_mutex_;
     void* live_source_[2] = {nullptr, nullptr};  // GstElement*, ref held
     std::atomic<bool> relaunch_[2] = {{false}, {false}};
+    // Updated by the video loops, read by the control server.
+    std::atomic<bool> streaming_[2] = {{false}, {false}};
+    std::atomic<uint64_t> frames_[2] = {{0}, {0}};
+    std::atomic<uint64_t> bytes_[2] = {{0}, {0}};
+    std::atomic<uint64_t> fps_milli_[2] = {{0}, {0}};
     std::atomic<bool> stopping_{false};
     std::atomic<bool> worker_exited_{false};
     std::thread worker_;

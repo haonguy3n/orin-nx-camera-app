@@ -42,14 +42,30 @@ public:
         static const std::string kNone;
         return rtsp_ != nullptr ? rtsp_->bound_address() : kNone;
     }
+    // In usb mode "clients" means an authenticated USB session, which is what
+    // a streaming camera implies.
     int client_count() const override {
-        return rtsp_ != nullptr ? rtsp_->client_count() : 0;
+        if (rtsp_ != nullptr) return rtsp_->client_count();
+        auto* server = usb_ ? usb_() : nullptr;
+        if (server == nullptr) return 0;
+        return (server->stats(0).streaming || server->stats(1).streaming) ? 1 : 0;
     }
+    // Report whichever transport is actually serving. With no RTSP (usb mode)
+    // this comes from the USB transport's own counters -- otherwise get-status
+    // showed an empty status while video was streaming perfectly, which is
+    // exactly the kind of "looks dead but works" signal that wastes a debug
+    // session.
     StreamStatus stream_status(int cam) override {
-        // Without RTSP this reports an empty status rather than a wrong one.
-        // Sourcing it from the USB transport's own frame counters is the
-        // remaining piece -- see the get-status gap.
-        return rtsp_ != nullptr ? rtsp_->stream_status(cam) : StreamStatus{};
+        if (rtsp_ != nullptr) return rtsp_->stream_status(cam);
+        StreamStatus out;
+        if (auto* server = usb_ ? usb_() : nullptr) {
+            const auto s = server->stats(static_cast<uint8_t>(cam));
+            out.mounted = true;  // configured and owned by this transport
+            out.streaming = s.streaming;
+            out.frames = s.frames;
+            out.fps = s.fps;
+        }
+        return out;
     }
 
     // True if either transport took it. The RTSP side is asked first so

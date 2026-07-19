@@ -589,7 +589,8 @@ void video_loop(Session& session, uint8_t camera,
                 const std::atomic<bool>& enabled, const std::string& detect_model,
                 int detect_w, int detect_h, double detect_score, int detect_fps,
                 std::atomic<bool>& relaunch,
-                const std::function<void(uint8_t, void*)>& publish) {
+                const std::function<void(uint8_t, void*)>& publish,
+                const std::function<void(uint8_t, bool, size_t)>& report) {
     // Load the detector once for the camera's lifetime (model load is heavy).
     std::unique_ptr<detect::IFaceDetector> detector;
     if (!detect_model.empty()) {
@@ -657,7 +658,10 @@ void video_loop(Session& session, uint8_t camera,
             // Expose the source while this pipeline lives, so the control
             // server can set exposure/gain on it.
             publish(camera, pipeline.camsrc);
-            SCOPE_EXIT { publish(camera, nullptr); };
+            SCOPE_EXIT {
+                publish(camera, nullptr);
+                report(camera, false, 0);  // pipeline down: not streaming
+            };
             size_t total = 0, reported = 0;
             while (!session.dead) {
                 // Bounded pull so session teardown is noticed promptly even
@@ -689,6 +693,7 @@ void video_loop(Session& session, uint8_t camera,
                     }
                     produced = true;
                     total += map.size;
+                    report(camera, true, map.size);
                     if (total - reported >= 8 * 1024 * 1024) {
                         reported = total;
                         XLOGF(INFO, "secure-usb: cam%u %zu KiB sent",
@@ -782,6 +787,28 @@ void SecureUsbServer::set_control_dispatcher(ControlDispatcher dispatcher) {
 
 void SecureUsbServer::set_update_channel_factory(UpdateChannelFactory factory) {
     update_channel_factory_ = std::move(factory);
+}
+
+void SecureUsbServer::report_frame(uint8_t camera, bool streaming, size_t bytes) {
+    if (camera >= kCameras) return;
+    streaming_[camera] = streaming;
+    if (!streaming) {
+        fps_milli_[camera] = 0;
+        return;
+    }
+    frames_[camera].fetch_add(1, std::memory_order_relaxed);
+    bytes_[camera].fetch_add(bytes, std::memory_order_relaxed);
+}
+
+SecureUsbServer::CameraStats SecureUsbServer::stats(uint8_t camera) const {
+    CameraStats out;
+    if (camera >= kCameras) return out;
+    out.streaming = streaming_[camera].load(std::memory_order_relaxed);
+    out.frames = frames_[camera].load(std::memory_order_relaxed);
+    out.bytes = bytes_[camera].load(std::memory_order_relaxed);
+    out.fps = static_cast<double>(fps_milli_[camera].load(
+                  std::memory_order_relaxed)) / 1000.0;
+    return out;
 }
 
 void SecureUsbServer::publish_source(uint8_t camera, void* element) {
@@ -970,6 +997,9 @@ void SecureUsbServer::serve_session(int ep0) {
                             relaunch_[camera],
                             [this](uint8_t cam, void* element) {
                                 publish_source(cam, element);
+                            },
+                            [this](uint8_t cam, bool live, size_t bytes) {
+                                report_frame(cam, live, bytes);
                             });
                     });
                 }
