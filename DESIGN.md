@@ -6,6 +6,12 @@ over USB**, with a host-side UI application.
 
 ---
 
+> **Transport architecture (agreed 2026-07-19):** encryption and channel
+> multiplexing sit above the transport, so USB and network carry the same
+> encrypted record protocol and network mode becomes CSU-over-TCP rather than
+> RTSP. See [docs/TRANSPORT-ARCHITECTURE.md](docs/TRANSPORT-ARCHITECTURE.md).
+> Sections below that assume RTSP is the network path predate that decision.
+
 ## 1. System overview
 
 ```
