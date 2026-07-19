@@ -33,6 +33,15 @@ std::string dispatch_request(ControlRegistry& registry, ControlContext& context,
 
 class ControlServer {
 public:
+    // Pushes one line to every connected client, unsolicited. Face detection
+    // in network mode needs this: there is no Meta channel without a secure
+    // session, so boxes ride the control connection instead.
+    //
+    // This makes the protocol no longer strictly request/response. Events
+    // carry no "id", which is how a client tells them from a reply -- see
+    // proto/PROTOCOL.md. Must be called on the GLib main loop.
+    void broadcast(const std::string& line);
+
     ControlServer(ControlRegistry& registry, ControlContext context);
     ~ControlServer();
 
@@ -59,6 +68,7 @@ private:
     camera::base::AsyncServerSocket socket_;
     camera::base::SSLContext tls_;  // disabled unless [server] tls-* is configured
     std::unordered_set<Conn*> conns_;
+
 };
 
 }  // namespace camera

@@ -5,6 +5,8 @@
 // class. Delegates per-camera state to MountController instances.
 #pragma once
 
+#include "camera/detect/MetaSink.h"
+
 #include <gst/rtsp-server/rtsp-server.h>
 
 #include <array>
@@ -24,6 +26,10 @@ namespace camera {
 
 class RtspServer : public IStreamController {
 public:
+    // Where detection boxes go in network mode. Must be set before start();
+    // null leaves detection off, which is what a build without a model does.
+    void set_meta_sink(detect::IMetaSink* meta) { meta_sink_ = meta; }
+
     explicit RtspServer(const Config& config, ISourceFactory& source_factory);
     ~RtspServer();
 

@@ -1,5 +1,11 @@
 #include "camera/rtsp/RtspServer.h"
 
+#include <unistd.h>
+
+#include <algorithm>
+
+#include "camera/pipeline/PipelineBuilder.h"
+
 #include <glib.h>
 
 #include <string>
@@ -82,7 +88,36 @@ camera::base::Expected<camera::base::Unit, std::string> RtspServer::start() {
             continue;
         }
 
-        const std::string launch = source->build_launch(cam);
+        std::string launch = source->build_launch(cam);
+        // Face detection in network mode: tee a detect branch off alongside
+        // the RTP payloader. gst-rtsp-server only requires that "pay0" exists,
+        // so the appsink can live in the same bin; MountController picks it up
+        // on media-configure. Same swap trick the USB launch uses, so the
+        // source builders stay unaware of detection.
+        if (meta_sink_ != nullptr && !config_.detect_model.empty() &&
+            access(config_.detect_model.c_str(), R_OK) == 0) {
+            const std::string plain = PipelineBuilder::nvenc_tail(cam);
+            const size_t at = launch.rfind(plain);
+            if (at != std::string::npos) {
+                const int detect_h =
+                    cam.width > 0
+                        ? std::max(2, static_cast<int>(
+                                          static_cast<long long>(
+                                              config_.detect_width) *
+                                          cam.height / cam.width) & ~1)
+                        : config_.detect_width;
+                launch.replace(at, plain.size(),
+                               PipelineBuilder::nvenc_tail_with_detect(
+                                   cam, config_.detect_width, detect_h));
+                mounts_[i]->enable_detection(meta_sink_, config_.detect_model,
+                                             config_.detect_width, detect_h,
+                                             config_.detect_score,
+                                             config_.detect_fps);
+                XLOGF(INFO, "rtsp: cam%d detection enabled (%dx%d, score>=%.2f,"
+                            " %d fps)", i, config_.detect_width, detect_h,
+                      config_.detect_score, config_.detect_fps);
+            }
+        }
 
         // Offered RTP transports. TCP-interleaved by default: hosts with
         // stateful inbound-UDP filtering silently lose UDP RTP (server

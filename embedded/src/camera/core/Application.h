@@ -18,6 +18,7 @@
 #include "camera/control/ControlContext.h"
 #include "camera/control/ControlRegistry.h"
 #include "camera/control/ControlServer.h"
+#include "camera/detect/MetaSink.h"
 #include "camera/discovery/DiscoveryServer.h"
 #include "camera/pipeline/SourceFactory.h"
 #include "camera/rtsp/RtspServer.h"
@@ -75,6 +76,10 @@ private:
     // see identical state).
     std::unique_ptr<ControlContext> control_context_;
     std::unique_ptr<ControlServer> control_;
+    // Raw pointer handed to the meta sink, which outlives nothing but
+    // needs to see control_ once it exists.
+    ControlServer* control_ptr_ = nullptr;
+    std::unique_ptr<detect::IMetaSink> meta_sink_;
     std::unique_ptr<DiscoveryServer> discovery_;
     std::unique_ptr<UpdateServer> update_server_;
     // transports=usb only: second instance on the CDC-NCM address, so

@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <functional>
 #include <memory>
+#include <utility>
 #include <mutex>
 
 #include "camera/control/ControlServer.h"
@@ -115,6 +116,40 @@ std::string run_on_main_loop(const std::function<std::string()>& work) {
     return std::move(job.result);
 }
 
+// Network-mode delivery for detection boxes: the control connection, since
+// there is no Meta channel without a secure session. Same JSON payload the USB
+// path sends, so the host parses one format either way.
+class ControlMetaSink : public detect::IMetaSink {
+public:
+    explicit ControlMetaSink(ControlServer** server) : server_(server) {}
+
+    void on_meta(uint8_t camera, const std::string& json) override {
+        ControlServer* server = server_ != nullptr ? *server_ : nullptr;
+        if (server == nullptr) return;
+        // Called from a detection thread; broadcast touches the connection set
+        // owned by the main loop, so hop over. Fire-and-forget: boxes are
+        // droppable and must never hold up the detector.
+        auto* line = new std::string("{\"event\":\"faces\",\"camera\":" +
+                                     std::to_string(camera) + ",\"data\":" +
+                                     json + "}");
+        auto* target = server;
+        g_main_context_invoke_full(
+            nullptr, G_PRIORITY_DEFAULT_IDLE,
+            [](gpointer data) -> gboolean {
+                auto* payload = static_cast<std::pair<ControlServer*,
+                                                      std::string*>*>(data);
+                payload->first->broadcast(*payload->second);
+                delete payload->second;
+                delete payload;
+                return G_SOURCE_REMOVE;
+            },
+            new std::pair<ControlServer*, std::string*>(target, line), nullptr);
+    }
+
+private:
+    ControlServer** server_;
+};
+
 }  // namespace
 
 Application::Application(std::string conf_path)
@@ -136,6 +171,11 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
     const bool usb_only = config_.transports == "usb";
     if (!usb_only) {
         rtsp_ = std::make_unique<RtspServer>(config_, *source_factory_);
+        // Network mode: detection boxes go out over the control connection.
+        // The sink reads control_ through a pointer because the control server
+        // is constructed after the mounts are built.
+        meta_sink_ = std::make_unique<ControlMetaSink>(&control_ptr_);
+        rtsp_->set_meta_sink(meta_sink_.get());
         rtsp_->set_stall_handler([]() {
             // Every camera is dead -- nothing left to serve. Hard exit, no
             // orderly teardown: dismantling GStreamer around a stalled
@@ -201,6 +241,7 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
     if (config_.control_port > 0 && !usb_only) {
         control_ = std::make_unique<ControlServer>(registry_,
                                                     *control_context_);
+        control_ptr_ = control_.get();
         if (auto r = control_->start(rtsp_->bound_address(),
                                      config_.control_port);
             !r) {

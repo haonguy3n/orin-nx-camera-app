@@ -228,6 +228,18 @@ std::string dispatch_request(ControlRegistry& registry_,
 
     return out;
 }
+void ControlServer::broadcast(const std::string& line) {
+    if (line.empty() || conns_.empty()) return;
+    const std::string out = line.back() == '\n' ? line : line + "\n";
+    for (Conn* conn : conns_) {
+        // Best-effort: a client that cannot keep up is not worth failing the
+        // detector over, and boxes are droppable by nature.
+        g_output_stream_write_all(g_io_stream_get_output_stream(conn->io),
+                                  out.data(), out.size(), nullptr, nullptr,
+                                  nullptr);
+    }
+}
+
 void ControlServer::process_line(Conn* conn, const char* line) {
     const std::string out = dispatch_request(registry_, context_, line);
     if (out.empty())
