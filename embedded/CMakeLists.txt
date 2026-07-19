@@ -43,6 +43,7 @@ add_executable(camera-streamer
     src/camera/media/Element.cpp
     src/camera/media/Bin.cpp
     src/camera/media/Pipeline.cpp
+    src/camera/media/CameraPipeline.cpp
     # pipeline
     src/camera/pipeline/PipelineBuilder.cpp
     src/camera/pipeline/ArgusSource.cpp

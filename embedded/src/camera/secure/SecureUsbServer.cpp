@@ -30,6 +30,7 @@
 #include "camera/base/ScopeGuard.h"
 #include "camera/base/logging/xlog.h"
 #include "camera/detect/FaceDetector.h"
+#include "camera/media/CameraPipeline.h"
 #include "camera/detect/Snapshot.h"
 #include "camera/secure/FfsGadget.h"
 #include "secure/SecureHandshake.h"
@@ -513,6 +514,55 @@ private:
     LocalTunnel tunnel_;
 };
 
+// Encoded frames -> encrypted records. The transport half of the capture/
+// transport split: CameraPipeline will drive this via on_frame once video_loop
+// moves onto it, and today video_loop calls it directly, so the behaviour is
+// identical either way.
+class VideoSink : public media::IFrameTransport {
+public:
+    VideoSink(Session& session, uint8_t camera,
+              const std::function<void(uint8_t, bool, size_t)>& report)
+        : session_(session), camera_(camera), report_(report) {}
+
+    void on_frame(uint8_t camera, const media::Frame& frame) override {
+        if (!first_) {
+            XLOGF(INFO, "secure-usb: cam%u streaming (first %zu bytes)",
+                  static_cast<unsigned>(camera), frame.size);
+            first_ = true;
+        }
+        total_ += frame.size;
+        if (report_) report_(camera, true, frame.size);
+        if (total_ - reported_ >= 8 * 1024 * 1024) {
+            reported_ = total_;
+            XLOGF(INFO, "secure-usb: cam%u %zu KiB sent",
+                  static_cast<unsigned>(camera), total_ / 1024);
+        }
+        // Split across records: one access unit is not one record. An IDR
+        // frame at this resolution and bitrate routinely exceeds kMaxPayload,
+        // and handing an oversized payload to make_wire_record fails the
+        // enqueue -- which used to kill the session on the first keyframe,
+        // after the tiny VPS/SPS/PPS buffer had already gone through.
+        constexpr size_t kChunk = kMaxPayload - 2;  // channel + stream bytes
+        bool ok = true;
+        for (size_t offset = 0; offset < frame.size && ok; offset += kChunk) {
+            const size_t piece = std::min(kChunk, frame.size - offset);
+            ok = session_.enqueue(Channel::Video, camera, frame.data + offset,
+                                  piece, /*droppable=*/true);
+        }
+        if (!ok) session_.dead = true;  // sealing failed; the peer is desynced
+    }
+
+    [[nodiscard]] bool produced() const { return first_; }
+
+private:
+    Session& session_;
+    uint8_t camera_;
+    const std::function<void(uint8_t, bool, size_t)>& report_;
+    bool first_ = false;
+    size_t total_ = 0;
+    size_t reported_ = 0;
+};
+
 // Pulls raw BGR frames from the pipeline's optional detection branch, runs the
 // face detector, and pushes the boxes over Channel::Meta. Runs on its own
 // thread so inference never blocks the video path; boxes are droppable.
@@ -662,7 +712,7 @@ void video_loop(Session& session, uint8_t camera,
                 publish(camera, nullptr);
                 report(camera, false, 0);  // pipeline down: not streaming
             };
-            size_t total = 0, reported = 0;
+            VideoSink video_sink(session, camera, report);
             while (!session.dead) {
                 // Bounded pull so session teardown is noticed promptly even
                 // when the camera has gone quiet.
@@ -685,41 +735,25 @@ void video_loop(Session& session, uint8_t camera,
                 }
                 GstBuffer* buffer = gst_sample_get_buffer(sample);
                 GstMapInfo map;
-                bool ok = true;
                 if (buffer != nullptr && gst_buffer_map(buffer, &map, GST_MAP_READ)) {
-                    if (!produced) {
-                        XLOGF(INFO, "secure-usb: cam%u streaming (first %zu bytes)",
-                              static_cast<unsigned>(camera), map.size);
-                    }
-                    produced = true;
-                    total += map.size;
-                    report(camera, true, map.size);
-                    if (total - reported >= 8 * 1024 * 1024) {
-                        reported = total;
-                        XLOGF(INFO, "secure-usb: cam%u %zu KiB sent",
-                              static_cast<unsigned>(camera), total / 1024);
-                    }
-                    // Split across records: one access unit is not one
-                    // record. An IDR frame at this resolution and bitrate
-                    // routinely exceeds kMaxPayload, and handing an
-                    // oversized payload to make_wire_record fails the
-                    // enqueue, which used to kill the session on the first
-                    // keyframe -- after the tiny VPS/SPS/PPS buffer had
-                    // already gone through.
-                    constexpr size_t kChunk = kMaxPayload - 2;  // channel+stream
-                    for (size_t offset = 0; offset < map.size && ok;
-                         offset += kChunk) {
-                        const size_t piece = std::min(kChunk, map.size - offset);
-                        ok = session.enqueue(Channel::Video, camera,
-                                             map.data + offset, piece, true);
-                    }
+                    // Same work as before, now behind the transport seam: the
+                    // chunking, accounting and logging live in VideoSink, which
+                    // CameraPipeline will drive directly in the next step.
+                    media::Frame frame;
+                    frame.data = map.data;
+                    frame.size = map.size;
+                    frame.pts = GST_BUFFER_PTS(buffer);
+                    frame.keyframe =
+                        !GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT);
+                    video_sink.on_frame(camera, frame);
+                    produced = video_sink.produced();
                     gst_buffer_unmap(buffer, &map);
                 }
                 gst_sample_unref(sample);
-                if (!ok) {
-                    session.dead = true;
-                    break;
-                }
+                // VideoSink marks the session dead if sealing failed: the
+                // record nonce is an implicit counter, so a dropped record
+                // desyncs the peer and the session cannot continue.
+                if (session.dead) break;
             }
         }
         if (session.dead)
