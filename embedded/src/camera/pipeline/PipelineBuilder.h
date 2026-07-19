@@ -25,6 +25,16 @@ public:
     // encoder the NVMM buffer pool starves after the first frame.
     static std::string nvenc_tail(const CameraConfig& cam);
 
+    // nvenc_tail with a detection branch teed off alongside the payloader, for
+    // face detection in network mode. gst-rtsp-server only requires that a
+    // "pay0" element exists in the launch string; anything else in the bin is
+    // its business, so the detect appsink can sit beside it. MountController
+    // picks the appsink up on media-configure, the same hook it already uses
+    // for the source element.
+    static std::string nvenc_tail_with_detect(const CameraConfig& cam,
+                                              int detect_width,
+                                              int detect_height);
+
     // Encode chain ending in an appsink carrying the elementary stream, for
     // transports that want frames rather than RTP (secure USB).
     static std::string appsink_tail(const CameraConfig& cam);

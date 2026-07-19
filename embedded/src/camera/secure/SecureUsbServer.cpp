@@ -30,6 +30,7 @@
 #include "camera/base/ScopeGuard.h"
 #include "camera/base/logging/xlog.h"
 #include "camera/detect/FaceDetector.h"
+#include "camera/detect/MetaSink.h"
 #include "camera/media/CameraPipeline.h"
 #include "camera/detect/Snapshot.h"
 #include "camera/secure/FfsGadget.h"
@@ -468,13 +469,28 @@ private:
     size_t reported_ = 0;
 };
 
-// Raw frames -> detector -> boxes on Channel::Meta. Driven by pump_raw() on a
+// Session's delivery: boxes ride the encrypted Meta channel.
+class SessionMetaSink : public detect::IMetaSink {
+public:
+    explicit SessionMetaSink(Session& session) : session_(session) {}
+    void on_meta(uint8_t camera, const std::string& json) override {
+        session_.enqueue(Channel::Meta, camera,
+                         reinterpret_cast<const uint8_t*>(json.data()),
+                         json.size(), /*droppable=*/true);
+    }
+
+private:
+    Session& session_;
+};
+
+// Raw frames -> detector -> boxes via an IMetaSink. Driven by pump_raw() on a
 // dedicated thread, because inference (~25 ms) must never sit in front of the
 // video pull (~16 ms/frame).
 class DetectSink : public media::IFrameTransport {
 public:
-    DetectSink(Session& session, uint8_t camera, detect::IFaceDetector& detector)
-        : session_(session), camera_(camera), detector_(detector) {}
+    DetectSink(detect::IMetaSink& meta, uint8_t camera,
+               detect::IFaceDetector& detector)
+        : meta_(meta), camera_(camera), detector_(detector) {}
 
     void on_frame(uint8_t, const media::Frame&) override {}  // video is not ours
 
@@ -497,14 +513,12 @@ public:
                 XLOGF(WARN, "secure-usb: cam%u snapshot failed: %s",
                       static_cast<unsigned>(camera), failure.c_str());
         }
-        const std::string json = detect::to_meta_json(camera, width, height, boxes);
-        session_.enqueue(Channel::Meta, camera,
-                         reinterpret_cast<const uint8_t*>(json.data()),
-                         json.size(), /*droppable=*/true);
+        meta_.on_meta(camera,
+                      detect::to_meta_json(camera, width, height, boxes));
     }
 
 private:
-    Session& session_;
+    detect::IMetaSink& meta_;
     uint8_t camera_;
     detect::IFaceDetector& detector_;
 };
@@ -582,10 +596,12 @@ void video_loop(Session& session, uint8_t camera,
                       static_cast<unsigned>(camera), description.c_str());
             // Detection pumps the raw branch on its own thread: inference must
             // never sit in front of the video pull.
+            std::unique_ptr<SessionMetaSink> meta_sink;
             std::unique_ptr<DetectSink> detect_sink;
             if (detector && pipeline.has_detect_branch()) {
+                meta_sink = std::make_unique<SessionMetaSink>(session);
                 detect_sink =
-                    std::make_unique<DetectSink>(session, camera, *detector);
+                    std::make_unique<DetectSink>(*meta_sink, camera, *detector);
                 pipeline.add_transport(detect_sink.get());
                 const int interval = detect_fps > 0 ? 1000 / detect_fps : 0;
                 detect_thread = std::thread([&pipeline, &detect_stop, &session,

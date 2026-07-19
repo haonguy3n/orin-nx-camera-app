@@ -36,6 +36,17 @@ std::string PipelineBuilder::nvenc_tail(const CameraConfig& cam) {
     return s;
 }
 
+std::string PipelineBuilder::nvenc_tail_with_detect(const CameraConfig& cam,
+                                                    int detect_width,
+                                                    int detect_height) {
+    // The RTSP payloader keeps its name; detection hangs off a second tee leg.
+    // Detection is best-effort here exactly as it is on the USB path: the
+    // branch leaks (leaky queue) rather than backpressuring the tee into the
+    // encoder that RTSP clients are watching.
+    return "tee name=t  t. ! " + nvenc_tail(cam) + "  t. ! " +
+           detect_branch(detect_width, detect_height);
+}
+
 std::string PipelineBuilder::appsink_tail(const CameraConfig& cam) {
     // Same encode chain as nvenc_tail, terminated at the parser instead of
     // the RTP payloader: the secure USB transport wants the H.265 elementary
