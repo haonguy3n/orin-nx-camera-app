@@ -527,7 +527,7 @@ private:
 // session. When `detect_model` is set the pipeline also carries a raw branch,
 // and a DetectSink pumps it on its own thread.
 void video_loop(Session& session, uint8_t camera,
-                const std::function<std::string()>& describe,
+                const std::function<media::PipelineSpec()>& describe,
                 const std::atomic<bool>& enabled, const std::string& detect_model,
                 int detect_w, int detect_h, double detect_score, int detect_fps,
                 std::atomic<bool>& relaunch,
@@ -560,7 +560,7 @@ void video_loop(Session& session, uint8_t camera,
         }
         // Re-read each time: refresh_launch can have replaced it (zoom, and
         // any setting the live element cannot take).
-        const std::string description = describe();
+        const media::PipelineSpec description = describe();
         relaunch = false;
         media::CameraPipeline pipeline(camera, description);
         bool produced = false;
@@ -593,7 +593,7 @@ void video_loop(Session& session, uint8_t camera,
                 XLOGF(WARN,
                       "secure-usb: cam%u pipeline has no 'detect' appsink; "
                       "detection off (launch: %s)",
-                      static_cast<unsigned>(camera), description.c_str());
+                      static_cast<unsigned>(camera), description.source.c_str());
             // Detection pumps the raw branch on its own thread: inference must
             // never sit in front of the video pull.
             std::unique_ptr<SessionMetaSink> meta_sink;
@@ -677,7 +677,7 @@ void video_loop(Session& session, uint8_t camera,
 }  // namespace
 
 SecureUsbServer::SecureUsbServer(std::string certificate, std::string private_key,
-                                 std::vector<std::string> video_launch)
+                                 std::vector<media::PipelineSpec> video_launch)
     : certificate_(std::move(certificate)),
       private_key_(std::move(private_key)),
       video_launch_(std::move(video_launch)) {}
@@ -760,8 +760,8 @@ bool SecureUsbServer::set_source_property(uint8_t camera, const char* property,
     return pipeline->set_source_property(property, value);
 }
 
-void SecureUsbServer::refresh_launch(uint8_t camera, std::string launch) {
-    if (camera >= kCameras || launch.empty()) return;
+void SecureUsbServer::refresh_launch(uint8_t camera, media::PipelineSpec launch) {
+    if (camera >= kCameras || launch.source.empty()) return;
     if (camera < video_launch_.size())
         video_launch_[camera] = std::move(launch);
     // Ask the video loop to rebuild. A live session picks it up within one
@@ -780,8 +780,8 @@ void SecureUsbServer::set_face_detection(std::string model, int input_width,
     detect_fps_ = detect_fps;
 }
 
-std::string SecureUsbServer::video_description(uint8_t camera) const {
-    if (camera < video_launch_.size() && !video_launch_[camera].empty())
+media::PipelineSpec SecureUsbServer::video_spec(uint8_t camera) const {
+    if (camera < video_launch_.size() && !video_launch_[camera].source.empty())
         return video_launch_[camera];
     // No fallback. This used to re-serve the camera's own RTSP mount over
     // loopback when RTSP owned the sensor, which only arose under
@@ -917,7 +917,7 @@ void SecureUsbServer::serve_session(int ep0) {
                     workers.emplace_back([this, raw, camera] {
                         video_loop(
                             *raw, camera,
-                            [this, camera] { return video_description(camera); },
+                            [this, camera] { return video_spec(camera); },
                             stream_enabled_[camera], detect_model_,
                             detect_width_, detect_height_, detect_score_, detect_fps_,
                             relaunch_[camera],

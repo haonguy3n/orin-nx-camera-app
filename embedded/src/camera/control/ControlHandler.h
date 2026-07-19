@@ -28,8 +28,6 @@ namespace camera {
 struct ControlContext {
     Config& config;
     IStreamController& stream;
-    IV4l2DeviceFactory& v4l2_factory;
-    ISourceFactory& source_factory;
     SwupdateClient& swupdate;
     std::function<void()> reload;
     // Set by the application when a transport (secure USB) carries live

@@ -36,6 +36,11 @@ public:
     Element* set(const std::string& prop, gint64 value);
     Element* set(const std::string& prop, double value);
 
+    // Sets a property from its string form via gst_util_set_object_arg --
+    // the only way in for enum/flags properties ("leaky", "tune"), where
+    // g_object_set would need the numeric value.
+    Element* set_from_string(const std::string& prop, const std::string& value);
+
     // capsfilter "caps" from a caps string. No-op on an unparseable string,
     // which is reported rather than silently leaving caps unset.
     Element* set_caps(const std::string& caps);

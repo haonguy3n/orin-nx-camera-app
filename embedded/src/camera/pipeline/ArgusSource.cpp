@@ -19,17 +19,19 @@ constexpr const char* kAutoGain = "1 16";
 
 }  // namespace
 
-std::string ArgusSource::build_launch(const CameraConfig& cam) const {
-    std::string p = "( ";
-    p += "nvarguscamerasrc name=camsrc sensor-id=" +
+std::string ArgusSource::build_source_fragment(const CameraConfig& cam) const {
+    std::string p = "nvarguscamerasrc name=camsrc sensor-id=" +
          std::to_string(cam.sensor_id) +
          PipelineBuilder::argus_ranges(cam) +
          " ! video/x-raw(memory:NVMM)," + PipelineBuilder::caps_tail(cam);
     if (cam.zoom > 1.0)
         p += PipelineBuilder::zoom_tail(cam);
-    p += " ! " + PipelineBuilder::nvenc_tail(cam);
-    p += " )";
     return p;
+}
+
+std::string ArgusSource::build_launch(const CameraConfig& cam) const {
+    return "( " + build_source_fragment(cam) + " ! " +
+           PipelineBuilder::nvenc_tail(cam) + " )";
 }
 
 void ArgusSource::apply_initial_settings(const CameraConfig& /*cam*/) const {
@@ -69,8 +71,7 @@ SourceResult ArgusSource::set_gain(int cam_index, CameraConfig& cam, double gain
     return camera::base::unit;
 }
 
-SourceResult ArgusSource::set_trigger(CameraConfig& /*cam*/, int /*mode*/,
-                                      IV4l2DeviceFactory& /*v4l2*/) const {
+SourceResult ArgusSource::set_trigger(CameraConfig& /*cam*/, int /*mode*/) const {
     return camera::base::makeUnexpected(std::string("hardware trigger requires the v4l2 source "
                    "(current source 'argus')"));
 }

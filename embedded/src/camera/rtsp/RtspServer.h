@@ -30,7 +30,7 @@ public:
     // null leaves detection off, which is what a build without a model does.
     void set_meta_sink(detect::IMetaSink* meta) { meta_sink_ = meta; }
 
-    explicit RtspServer(const Config& config, ISourceFactory& source_factory);
+    explicit RtspServer(const Config& config);
     ~RtspServer();
 
     RtspServer(const RtspServer&) = delete;
@@ -60,7 +60,6 @@ private:
     void disable_mount(int cam);
 
     const Config& config_;
-    ISourceFactory& source_factory_;
     // Where network-mode detection boxes go; null leaves detection off.
     detect::IMetaSink* meta_sink_ = nullptr;
     std::string address_;

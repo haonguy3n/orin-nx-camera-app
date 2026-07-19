@@ -45,6 +45,14 @@ Element* Element::set(const std::string& prop, double value) {
     return this;
 }
 
+Element* Element::set_from_string(const std::string& prop,
+                                  const std::string& value) {
+    if (element_ != nullptr)
+        gst_util_set_object_arg(G_OBJECT(element_), prop.c_str(),
+                                value.c_str());
+    return this;
+}
+
 Element* Element::set_caps(const std::string& caps) {
     if (element_ == nullptr) return this;
     GstCaps* parsed = gst_caps_from_string(caps.c_str());

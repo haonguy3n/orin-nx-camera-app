@@ -7,6 +7,8 @@
 #include <thread>
 #include <vector>
 
+#include "camera/media/CameraPipeline.h"
+
 namespace camera::secure {
 
 // Owns the FunctionFS vendor interface in the camera-streamer process.  It is
@@ -14,13 +16,11 @@ namespace camera::secure {
 // the normal application sockets.
 class SecureUsbServer {
 public:
-    // `video_launch` holds one gst_parse_launch description per camera, each
-    // ending in `appsink name=sink`, so frames are taken straight from the
-    // encoder. Empty entries fall back to pulling the camera's local RTSP
-    // mount, which is required when the RTSP server also owns the sensor --
-    // Argus permits only one consumer per camera.
+    // `video_launch` holds one media::PipelineSpec per camera: the capture
+    // fragment plus typed encode/detect parameters, so frames are taken
+    // straight from the encoder. An empty spec disables that camera.
     SecureUsbServer(std::string certificate, std::string private_key,
-                    std::vector<std::string> video_launch = {});
+                    std::vector<media::PipelineSpec> video_launch = {});
     ~SecureUsbServer();
     bool start(std::string* error);
     void stop();
@@ -72,11 +72,11 @@ public:
     bool set_source_property(uint8_t camera, const char* property,
                              const char* value);
 
-    // Replace the launch description and ask the running pipeline to rebuild
+    // Replace the pipeline spec and ask the running pipeline to rebuild
     // with it. Needed for anything the source cannot change live (zoom is a
     // crop on nvvidconv), and so later sessions do not revert: the old
     // description was frozen at construction.
-    void refresh_launch(uint8_t camera, std::string launch);
+    void refresh_launch(uint8_t camera, media::PipelineSpec launch);
 
 private:
     void run();
@@ -85,9 +85,8 @@ private:
     // poll() on them reports ready unconditionally, which is why the earlier
     // single-threaded event loop could not work.
     void serve_session(int ep0);
-    // Direct encoder tap when configured, otherwise the camera's local RTSP
-    // mount.
-    std::string video_description(uint8_t camera) const;
+    // Direct encoder tap; an empty spec means the camera is not served.
+    media::PipelineSpec video_spec(uint8_t camera) const;
     // Publishes/clears the live source for set_source_property.
     void publish_source(uint8_t camera, void* element);
     // Called per frame by the video loops.
@@ -95,7 +94,7 @@ private:
 
     std::string certificate_;
     std::string private_key_;
-    std::vector<std::string> video_launch_;
+    std::vector<media::PipelineSpec> video_launch_;
     ControlDispatcher control_dispatcher_;
     UpdateChannelFactory update_channel_factory_;
     std::string detect_model_;

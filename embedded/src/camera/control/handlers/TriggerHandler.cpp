@@ -19,13 +19,12 @@ HandlerResult SetTriggerHandler::handle(JsonObject* params, ControlContext& ctx)
     }
 
     CameraConfig& cam = ctx.config.cameras[*cam_idx];
-    auto source = ctx.source_factory.create(cam.source);
+    auto source = create_source(cam.source);
     if (!source) {
         return camera::base::makeUnexpected(ControlError{kFailed, "unknown source '" + cam.source + "'"});
     }
 
-    SourceResult r = source->set_trigger(cam, static_cast<int>(mode),
-                                         ctx.v4l2_factory);
+    SourceResult r = source->set_trigger(cam, static_cast<int>(mode));
     if (!r) {
         return camera::base::makeUnexpected(ControlError{kFailed, std::move(r.error())});
     }
@@ -44,11 +43,7 @@ HandlerResult FireTriggerHandler::handle(JsonObject* params, ControlContext& ctx
                    "(current source '" + cam.source + "')"});
     }
 
-    auto dev = ctx.v4l2_factory.open(cam.device);
-    if (!dev) {
-        return camera::base::makeUnexpected(ControlError{kFailed, cam.device + ": cannot open device"});
-    }
-    auto r = dev->fire_single_trigger();
+    auto r = V4l2Device(cam.device).fire_single_trigger();
     if (!r) {
         return camera::base::makeUnexpected(
             ControlError{kFailed, std::move(r.error())});
@@ -75,11 +70,7 @@ HandlerResult SetSyncHandler::handle(JsonObject* params, ControlContext& ctx) {
         CameraConfig& cam = ctx.config.cameras[i];
         if (!cam.enabled)
             continue;
-        auto dev = ctx.v4l2_factory.open(cam.device);
-        if (!dev) {
-            return camera::base::makeUnexpected(ControlError{kFailed, cam.device + ": cannot open device"});
-        }
-        auto r = dev->set_trigger_mode(mode);
+        auto r = V4l2Device(cam.device).set_trigger_mode(mode);
         if (!r) {
             return camera::base::makeUnexpected(
                 ControlError{kFailed, std::move(r.error())});

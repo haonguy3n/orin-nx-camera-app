@@ -35,13 +35,10 @@ public:
                                               int detect_width,
                                               int detect_height);
 
-    // Encode chain ending in an appsink carrying the elementary stream, for
-    // transports that want frames rather than RTP (secure USB).
-    static std::string appsink_tail(const CameraConfig& cam);
-
     // A raw-BGR branch (`appsink name=detect`) at the given detector working
-    // resolution, for the face-detection tap. Prefixed with a tee leg so it
-    // can be spliced alongside the encode tail.
+    // resolution, for the face-detection tap in network mode. The usb
+    // transport builds the equivalent branch as typed objects
+    // (media::CameraPipeline::build).
     static std::string detect_branch(int width, int height);
 
     // Crop rectangle for digital zoom. nvvidconv's left/right/top/bottom

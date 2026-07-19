@@ -93,6 +93,11 @@ void MountController::stop_detection() {
 // client, so this runs while a client is connected and stops when the media
 // goes away -- the same "no session, no detection" property the USB path has.
 void MountController::start_detection(GstElement* bin) {
+#ifndef ENABLE_SECURE_USB
+    // The detect/ implementation TUs (OpenCV) are only compiled with the
+    // secure-USB extras; without them there is no detector to run.
+    (void)bin;
+#else
     if (meta_sink_ == nullptr || detect_model_.empty() || bin == nullptr) return;
     GstElement* raw = gst_bin_get_by_name(GST_BIN(bin), "detect");
     if (raw == nullptr) return;  // launch string has no detect branch
@@ -154,6 +159,7 @@ void MountController::start_detection(GstElement* bin) {
         });
     XLOGF(INFO, "rtsp: cam%u face detection running on the mount",
           static_cast<unsigned>(camera));
+#endif
 }
 
 void MountController::on_media_configure(GstRTSPMediaFactory* /*factory*/,

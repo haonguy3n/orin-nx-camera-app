@@ -11,11 +11,8 @@ HandlerResult ListControlsHandler::handle(JsonObject* params, ControlContext& ct
     if (!cam_idx) {
         return camera::base::makeUnexpected(cam_idx.error());
     }
-    auto dev = ctx.v4l2_factory.open(ctx.config.cameras[*cam_idx].device);
-    if (!dev) {
-        return camera::base::makeUnexpected(ControlError{kFailed, ctx.config.cameras[*cam_idx].device + ": cannot open device"});
-    }
-    auto ctrls = dev->list_controls();
+    V4l2Device dev(ctx.config.cameras[*cam_idx].device);
+    auto ctrls = dev.list_controls();
     if (!ctrls) {
         return camera::base::makeUnexpected(
             ControlError{kFailed, std::move(ctrls.error())});
@@ -40,11 +37,8 @@ HandlerResult GetControlHandler::handle(JsonObject* params, ControlContext& ctx)
     if (!param_control(params, &control)) {
         return camera::base::makeUnexpected(ControlError{kInvalidParams, "control must be a name or numeric id"});
     }
-    auto dev = ctx.v4l2_factory.open(ctx.config.cameras[*cam_idx].device);
-    if (!dev) {
-        return camera::base::makeUnexpected(ControlError{kFailed, ctx.config.cameras[*cam_idx].device + ": cannot open device"});
-    }
-    auto c = dev->get_control(control);
+    V4l2Device dev(ctx.config.cameras[*cam_idx].device);
+    auto c = dev.get_control(control);
     if (!c) {
         return camera::base::makeUnexpected(
             ControlError{kFailed, std::move(c.error())});
@@ -67,11 +61,8 @@ HandlerResult SetControlHandler::handle(JsonObject* params, ControlContext& ctx)
     if (!param_int(params, "value", &value)) {
         return camera::base::makeUnexpected(ControlError{kInvalidParams, "value must be an integer"});
     }
-    auto dev = ctx.v4l2_factory.open(ctx.config.cameras[*cam_idx].device);
-    if (!dev) {
-        return camera::base::makeUnexpected(ControlError{kFailed, ctx.config.cameras[*cam_idx].device + ": cannot open device"});
-    }
-    auto r = dev->set_control(control, value);
+    V4l2Device dev(ctx.config.cameras[*cam_idx].device);
+    auto r = dev.set_control(control, value);
     if (!r) {
         return camera::base::makeUnexpected(
             ControlError{kFailed, std::move(r.error())});

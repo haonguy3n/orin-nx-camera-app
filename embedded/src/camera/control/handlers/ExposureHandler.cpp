@@ -22,7 +22,7 @@ HandlerResult handle_exposure_or_gain(bool is_exposure, JsonObject* params,
     }
 
     CameraConfig& cam = ctx.config.cameras[*cam_idx];
-    auto source = ctx.source_factory.create(cam.source);
+    auto source = create_source(cam.source);
     if (!source) {
         return camera::base::makeUnexpected(ControlError{kFailed, "unknown source '" + cam.source + "'"});
     }

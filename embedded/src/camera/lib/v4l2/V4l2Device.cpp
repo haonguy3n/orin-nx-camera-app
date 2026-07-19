@@ -131,40 +131,32 @@ camera::base::Expected<V4l2Control, std::string> find_control(
 
 }  // namespace
 
-/// @name Production IV4l2Device implementation
-/// @{
+camera::base::Expected<std::vector<V4l2Control>, std::string>
+V4l2Device::list_controls() {
+    auto fd = open_device();
+    if (!fd)
+        return camera::base::makeUnexpected(std::move(fd.error()));
+    std::vector<V4l2Control> out = enumerate(fd->fd(), "", nullptr);
+    if (out.empty())
+        return camera::base::makeUnexpected(device_path_ + ": no controls");
+    return out;
+}
 
-class V4l2DeviceImpl : public IV4l2Device {
-public:
-    explicit V4l2DeviceImpl(std::string device_path)
-        : device_path_(std::move(device_path)) {}
+camera::base::Expected<V4l2Control, std::string> V4l2Device::get_control(
+    const std::string& control) {
+    auto fd = open_device();
+    if (!fd)
+        return camera::base::makeUnexpected(std::move(fd.error()));
+    return find_control(fd->fd(), device_path_, control);
+}
 
-    camera::base::Expected<std::vector<V4l2Control>, std::string> list_controls()
-        override {
-        auto fd = open_device();
-        if (!fd)
-            return camera::base::makeUnexpected(std::move(fd.error()));
-        std::vector<V4l2Control> out = enumerate(fd->fd(), "", nullptr);
-        if (out.empty())
-            return camera::base::makeUnexpected(device_path_ + ": no controls");
-        return out;
-    }
+camera::base::Expected<camera::base::Unit, std::string> V4l2Device::set_control(
+    const std::string& control, int64_t value) {
+    auto fd = open_device();
+    if (!fd)
+        return camera::base::makeUnexpected(std::move(fd.error()));
 
-    camera::base::Expected<V4l2Control, std::string> get_control(
-        const std::string& control) override {
-        auto fd = open_device();
-        if (!fd)
-            return camera::base::makeUnexpected(std::move(fd.error()));
-        return find_control(fd->fd(), device_path_, control);
-    }
-
-    camera::base::Expected<camera::base::Unit, std::string> set_control(
-        const std::string& control, int64_t value) override {
-        auto fd = open_device();
-        if (!fd)
-            return camera::base::makeUnexpected(std::move(fd.error()));
-
-        auto ctrl = find_control(fd->fd(), device_path_, control);
+    auto ctrl = find_control(fd->fd(), device_path_, control);
         if (!ctrl)
             return camera::base::makeUnexpected(std::move(ctrl.error()));
 
@@ -180,81 +172,60 @@ public:
         cs.count = 1;
         cs.controls = &c;
 
-        if (xioctl(fd->fd(), VIDIOC_S_EXT_CTRLS, &cs) != 0)
-            return camera::base::makeUnexpected(
-                device_path_ + ": set '" + ctrl->name + "' = " +
-                std::to_string(value) + ": " + strerror(errno));
-        return camera::base::unit;
-    }
-
-    camera::base::Expected<camera::base::Unit, std::string> set_trigger_mode(
-        int mode) override {
-        auto ctrls = list_controls();
-        if (!ctrls)
-            return camera::base::makeUnexpected(std::move(ctrls.error()));
-        const V4l2Control* found = nullptr;
-        for (const V4l2Control& c : *ctrls) {
-            const std::string name = normalize(c.name);
-            if (name == "trigger mode") {
-                found = &c;
-                break;
-            }
-            if (!found && c.type != V4L2_CTRL_TYPE_BUTTON &&
-                name.find("trigger") != std::string::npos)
-                found = &c;
-        }
-        if (found == nullptr)
-            return camera::base::makeUnexpected(
-                device_path_ + ": no trigger control (not a VC MIPI sensor?)");
-        return set_control(std::to_string(found->id), mode);
-    }
-
-    camera::base::Expected<camera::base::Unit, std::string> fire_single_trigger() override {
-        auto ctrls = list_controls();
-        if (!ctrls)
-            return camera::base::makeUnexpected(std::move(ctrls.error()));
-        for (const V4l2Control& c : *ctrls) {
-            const std::string name = normalize(c.name);
-            if (name.find("single") != std::string::npos &&
-                name.find("trigger") != std::string::npos)
-                return set_control(std::to_string(c.id), 1);
-        }
+    if (xioctl(fd->fd(), VIDIOC_S_EXT_CTRLS, &cs) != 0)
         return camera::base::makeUnexpected(
-            device_path_ +
-            ": no single-trigger control (not a VC MIPI sensor?)");
-    }
-
-private:
-    camera::base::Expected<camera::base::File, std::string> open_device() const {
-        camera::base::File fd(
-            ::open(device_path_.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC),
-            /*ownsFd=*/true);
-        if (!fd)
-            return camera::base::makeUnexpected(device_path_ + ": " +
-                                         strerror(errno));
-        return fd;
-    }
-
-    std::string device_path_;
-};
-
-/// @}
-
-/// @name Production IV4l2DeviceFactory implementation
-/// @{
-
-class V4l2DeviceFactoryImpl : public IV4l2DeviceFactory {
-public:
-    std::unique_ptr<IV4l2Device> open(const std::string& device_path) override {
-        return std::make_unique<V4l2DeviceImpl>(device_path);
-    }
-};
-
-// Factory function for production code.
-std::unique_ptr<IV4l2DeviceFactory> create_v4l2_device_factory() {
-    return std::make_unique<V4l2DeviceFactoryImpl>();
+            device_path_ + ": set '" + ctrl->name + "' = " +
+            std::to_string(value) + ": " + strerror(errno));
+    return camera::base::unit;
 }
 
-/// @}
+camera::base::Expected<camera::base::Unit, std::string>
+V4l2Device::set_trigger_mode(int mode) {
+    auto ctrls = list_controls();
+    if (!ctrls)
+        return camera::base::makeUnexpected(std::move(ctrls.error()));
+    const V4l2Control* found = nullptr;
+    for (const V4l2Control& c : *ctrls) {
+        const std::string name = normalize(c.name);
+        if (name == "trigger mode") {
+            found = &c;
+            break;
+        }
+        if (!found && c.type != V4L2_CTRL_TYPE_BUTTON &&
+            name.find("trigger") != std::string::npos)
+            found = &c;
+    }
+    if (found == nullptr)
+        return camera::base::makeUnexpected(
+            device_path_ + ": no trigger control (not a VC MIPI sensor?)");
+    return set_control(std::to_string(found->id), mode);
+}
+
+camera::base::Expected<camera::base::Unit, std::string>
+V4l2Device::fire_single_trigger() {
+    auto ctrls = list_controls();
+    if (!ctrls)
+        return camera::base::makeUnexpected(std::move(ctrls.error()));
+    for (const V4l2Control& c : *ctrls) {
+        const std::string name = normalize(c.name);
+        if (name.find("single") != std::string::npos &&
+            name.find("trigger") != std::string::npos)
+            return set_control(std::to_string(c.id), 1);
+    }
+    return camera::base::makeUnexpected(
+        device_path_ +
+        ": no single-trigger control (not a VC MIPI sensor?)");
+}
+
+camera::base::Expected<camera::base::File, std::string>
+V4l2Device::open_device() const {
+    camera::base::File fd(
+        ::open(device_path_.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC),
+        /*ownsFd=*/true);
+    if (!fd)
+        return camera::base::makeUnexpected(device_path_ + ": " +
+                                     strerror(errno));
+    return fd;
+}
 
 }  // namespace camera

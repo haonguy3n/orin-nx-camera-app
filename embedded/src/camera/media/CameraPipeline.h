@@ -26,6 +26,7 @@
 
 #include "camera/base/Expected.h"
 #include "camera/base/Unit.h"
+#include "camera/media/Pipeline.h"
 
 namespace camera::media {
 
@@ -52,9 +53,31 @@ public:
 
 using PipelineResult = base::Expected<base::Unit, std::string>;
 
+// What to build. The source stays a launch fragment -- it is config-driven
+// (sensor id, caps, AE ranges, zoom crop) and logging it keeps the
+// gst-launch-1.0 repro path -- but everything after it (tee, encode chain,
+// detect branch) is constructed as typed objects. The tee bugs on this device
+// were string-edit bugs; objects make that class of bug unrepresentable.
+struct PipelineSpec {
+    // Bare fragment (no "( )") ending just before the encoder, e.g.
+    // "nvarguscamerasrc name=camsrc ... ! video/x-raw(memory:NVMM),...".
+    // "camsrc" is the element set_source_property reaches.
+    std::string source;
+    bool h265 = true;
+    int bitrate = 8000000;  // bit/s
+    // NVIDIA elements (nvv4l2h26Xenc, nvvidconv) vs generic ones
+    // (x26Xenc, videoconvert+videoscale) for hosts without the hardware.
+    bool hw = true;
+    // Detect branch working size; 0 = no detect branch.
+    int detect_width = 0;
+    int detect_height = 0;
+
+    bool operator==(const PipelineSpec&) const = default;
+};
+
 class CameraPipeline {
 public:
-    CameraPipeline(uint8_t camera, std::string description);
+    CameraPipeline(uint8_t camera, PipelineSpec spec);
     ~CameraPipeline();
 
     CameraPipeline(const CameraPipeline&) = delete;
@@ -95,12 +118,12 @@ public:
     // properties while streaming). False when nothing is up.
     bool set_source_property(const char* property, const char* value);
 
-    // Replaces the description and asks the owner to rebuild: anything the
+    // Replaces the spec and asks the owner to rebuild: anything the
     // source cannot change live (zoom is a crop) needs a new pipeline, and
     // without this a setting would not reach the next session either.
-    void set_description(std::string description);
+    void set_spec(PipelineSpec spec);
     bool relaunch_wanted() const { return relaunch_.load(); }
-    std::string description() const;
+    PipelineSpec spec() const;
 
     uint64_t frames() const { return frames_.load(); }
 
@@ -111,16 +134,17 @@ public:
 private:
     void deliver(GstSample* sample);
     void deliver_raw(GstSample* sample);
+    PipelineResult build(const PipelineSpec& spec);
 
     uint8_t camera_;
     mutable std::mutex mutex_;
-    std::string description_;
+    PipelineSpec spec_;
     std::atomic<bool> relaunch_{false};
     std::atomic<uint64_t> frames_{0};
 
-    GstElement* pipeline_ = nullptr;
-    GstAppSink* sink_ = nullptr;
-    GstAppSink* detect_ = nullptr;
+    std::unique_ptr<Pipeline> pipeline_;
+    GstAppSink* sink_ = nullptr;    // owned by the pipeline bin
+    GstAppSink* detect_ = nullptr;  // owned by the pipeline bin
     GstElement* source_ = nullptr;  // live element for set_source_property
     std::vector<IFrameTransport*> transports_;
 };

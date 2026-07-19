@@ -1,19 +1,16 @@
-// V4L2 device control access abstraction.
+// V4L2 device control access.
 //
-// IV4l2Device isolates the rest of the code from direct ioctl calls to
-// /dev/videoN. This enables unit-testing handlers that manipulate V4L2
-// controls (set-exposure, set-gain, set-trigger, ...) with a mock device.
-//
-// IV4l2DeviceFactory creates per-device IV4l2Device handles; the factory
-// indirection lets tests inject mock devices without touching real hardware.
+// V4l2Device wraps the direct ioctl calls to /dev/videoN. It holds only the
+// device path; every operation opens the node, acts, and closes it, so an
+// instance is cheap to construct wherever one is needed.
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <vector>
 
 #include "camera/base/Expected.h"
+#include "camera/base/File.h"
 #include "camera/base/Unit.h"
 
 namespace camera {
@@ -31,44 +28,42 @@ struct V4l2Control {
     uint32_t flags = 0;
 };
 
-// Interface for one V4L2 device node (/dev/videoN). All operations
-// return camera::base::Expected: the value on success, an error message on
-// failure (device missing, not a V4L2 device, unknown control, ...).
-class IV4l2Device {
+// One V4L2 device node (/dev/videoN). All operations return
+// camera::base::Expected: the value on success, an error message on failure
+// (device missing, not a V4L2 device, unknown control, ...).
+class V4l2Device {
 public:
-    virtual ~IV4l2Device() = default;
+    explicit V4l2Device(std::string device_path)
+        : device_path_(std::move(device_path)) {}
 
     // Every non-disabled scalar control the device exposes.
-    virtual camera::base::Expected<std::vector<V4l2Control>, std::string>
-    list_controls() = 0;
+    camera::base::Expected<std::vector<V4l2Control>, std::string>
+    list_controls();
 
     // |control| is a control name (matched case-insensitively, with space,
     // '_' and '-' treated as equal -- "trigger_mode" matches "Trigger Mode")
     // or a numeric id (decimal or 0x-prefixed hex).
-    virtual camera::base::Expected<V4l2Control, std::string> get_control(
-        const std::string& control) = 0;
-    virtual camera::base::Expected<camera::base::Unit, std::string> set_control(
-        const std::string& control, int64_t value) = 0;
+    camera::base::Expected<V4l2Control, std::string> get_control(
+        const std::string& control);
+    camera::base::Expected<camera::base::Unit, std::string> set_control(
+        const std::string& control, int64_t value);
 
     // Sets the VC MIPI hardware trigger mode (0 = disabled .. 7 = stream
     // level). Finds the driver's control by name ("trigger_mode" on the VC
     // driver; falls back to the first non-button control containing
     // "trigger").
-    virtual camera::base::Expected<camera::base::Unit, std::string> set_trigger_mode(
-        int mode) = 0;
+    camera::base::Expected<camera::base::Unit, std::string> set_trigger_mode(
+        int mode);
 
     // Presses the VC driver's software "single trigger" button control
     // (exposes one frame when the sensor is in a software-triggerable mode).
-    virtual camera::base::Expected<camera::base::Unit, std::string> fire_single_trigger() = 0;
-};
+    camera::base::Expected<camera::base::Unit, std::string>
+    fire_single_trigger();
 
-// Interface for creating IV4l2Device instances by device path.
-class IV4l2DeviceFactory {
-public:
-    virtual ~IV4l2DeviceFactory() = default;
-    // Returns a new IV4l2Device for |device_path| (e.g. "/dev/video0").
-    // The caller owns the returned pointer.
-    virtual std::unique_ptr<IV4l2Device> open(const std::string& device_path) = 0;
+private:
+    camera::base::Expected<camera::base::File, std::string> open_device() const;
+
+    std::string device_path_;
 };
 
 }  // namespace camera

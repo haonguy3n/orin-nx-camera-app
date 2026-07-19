@@ -59,7 +59,7 @@ HandlerResult SetIspHandler::handle(JsonObject* params, ControlContext& ctx) {
     }
     JsonNode* vn = json_object_get_member(params, "value");
     if (JSON_NODE_HOLDS_NULL(vn)) {  // forget the override
-        auto source = ctx.source_factory.create(cam.source);
+        auto source = create_source(cam.source);
         if (source)
             source->set_isp(*cam_idx, cam, name, "", ctx.stream);
         XLOGF(INFO, "control: cam%d isp %s reset", *cam_idx, name.c_str());
@@ -83,7 +83,7 @@ HandlerResult SetIspHandler::handle(JsonObject* params, ControlContext& ctx) {
         value = buf;
     }
 
-    auto source = ctx.source_factory.create(cam.source);
+    auto source = create_source(cam.source);
     if (!source) {
         return camera::base::makeUnexpected(ControlError{kFailed, "unknown source '" + cam.source + "'"});
     }

@@ -14,7 +14,7 @@ namespace {
 // Shared builder for both get-status and get-config. |include_live| adds
 // streaming state, live AE readback, and last_frame metadata.
 JsonNode* build_status(const Config& cfg, IStreamController& stream,
-                       IV4l2DeviceFactory& v4l2, bool include_live) {
+                       bool include_live) {
     JsonBuilder* b = json_builder_new();
     json_builder_begin_object(b);
     json_builder_set_member_name(b, "version");
@@ -48,16 +48,14 @@ JsonNode* build_status(const Config& cfg, IStreamController& stream,
             // exposure/gain are 0 (auto), this is what Argus AE chose.
             // Read from the driver's V4L2 controls; omitted if the
             // device node can't be queried.
-            auto dev = v4l2.open(cfg.cameras[i].device);
-            if (dev) {
-                if (auto live = dev->get_control("exposure")) {
-                    json_builder_set_member_name(b, "exposure_current");
-                    json_builder_add_int_value(b, live->value);
-                }
-                if (auto live = dev->get_control("gain")) {
-                    json_builder_set_member_name(b, "gain_current");
-                    json_builder_add_int_value(b, live->value);
-                }
+            V4l2Device dev(cfg.cameras[i].device);
+            if (auto live = dev.get_control("exposure")) {
+                json_builder_set_member_name(b, "exposure_current");
+                json_builder_add_int_value(b, live->value);
+            }
+            if (auto live = dev.get_control("gain")) {
+                json_builder_set_member_name(b, "gain_current");
+                json_builder_add_int_value(b, live->value);
             }
             if (s.frames > 0) {
                 json_builder_set_member_name(b, "last_frame");
@@ -81,11 +79,11 @@ JsonNode* build_status(const Config& cfg, IStreamController& stream,
 }  // namespace
 
 HandlerResult GetStatusHandler::handle(JsonObject* /*params*/, ControlContext& ctx) {
-    return build_status(ctx.config, ctx.stream, ctx.v4l2_factory, true);
+    return build_status(ctx.config, ctx.stream, true);
 }
 
 HandlerResult GetConfigHandler::handle(JsonObject* /*params*/, ControlContext& ctx) {
-    return build_status(ctx.config, ctx.stream, ctx.v4l2_factory, false);
+    return build_status(ctx.config, ctx.stream, false);
 }
 
 }  // namespace camera

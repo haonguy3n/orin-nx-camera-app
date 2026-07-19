@@ -238,9 +238,15 @@ nvarguscamerasrc name=camsrc sensor-id=0 ! 'video/x-raw(memory:NVMM),1440x1080@6
   t. ! ... ! appsink name=detect
 ```
 
-In network mode this is wrapped in **gst-rtsp-server** as `/cam0` and `/cam1`.
-gst-rtsp-server only requires that `pay0` exists, so the detect appsink lives in
-the same bin and `MountController` picks it up on `media-configure`.
+In **usb mode** only the source fragment (up to the NVMM caps) is a launch
+string; the tee, encode chain and detect branch are constructed as typed
+objects (`media::PipelineSpec` → `CameraPipeline::build` on the
+Element/Bin/Tee model) — the tee bugs on this device were string-edit bugs.
+In **network mode** the whole thing stays one launch string wrapped in
+**gst-rtsp-server** as `/cam0` and `/cam1` (the server manages the media
+itself, so programmatic bins would fight it); gst-rtsp-server only requires
+that `pay0` exists, so the detect appsink lives in the same bin and
+`MountController` picks it up on `media-configure`.
 
 Note `videoconvert` is deliberately absent: it is not in the device image, and
 `gst_parse_launch` answers a missing element with a PARTIAL pipeline plus a

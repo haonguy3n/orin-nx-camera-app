@@ -26,8 +26,8 @@ const char* client_ip(GstRTSPClient* client) {
 
 }  // namespace
 
-RtspServer::RtspServer(const Config& config, ISourceFactory& source_factory)
-    : config_(config), source_factory_(source_factory) {
+RtspServer::RtspServer(const Config& config)
+    : config_(config) {
     for (int i = 0; i < Config::kNumCameras; ++i)
         mounts_[i] = std::make_unique<MountController>(
             i, "/cam" + std::to_string(i));
@@ -81,7 +81,7 @@ camera::base::Expected<camera::base::Unit, std::string> RtspServer::start() {
         if (!cam.enabled)
             continue;
 
-        auto source = source_factory_.create(cam.source);
+        auto source = create_source(cam.source);
         if (!source) {
             XLOGF(WARN, "cam%d: unknown source '%s', skipping", i,
                       cam.source.c_str());
@@ -219,7 +219,7 @@ StreamStatus RtspServer::stream_status(int cam) {
 }
 
 void RtspServer::refresh_launch(int cam) {
-    auto source = source_factory_.create(config_.cameras[cam].source);
+    auto source = create_source(config_.cameras[cam].source);
     if (!source)
         return;
     const std::string launch = source->build_launch(config_.cameras[cam]);

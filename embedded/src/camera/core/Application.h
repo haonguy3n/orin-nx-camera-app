@@ -20,7 +20,6 @@
 #include "camera/control/ControlServer.h"
 #include "camera/detect/MetaSink.h"
 #include "camera/discovery/DiscoveryServer.h"
-#include "camera/pipeline/SourceFactory.h"
 #include "camera/rtsp/RtspServer.h"
 #include "camera/core/StreamController.h"
 #include "camera/update/SwupdateClient.h"
@@ -28,7 +27,6 @@
 #ifdef ENABLE_SECURE_USB
 #include "camera/secure/SecureUsbServer.h"
 #endif
-#include "camera/lib/v4l2/V4l2Device.h"
 #include "camera/base/Expected.h"
 #include "camera/base/Unit.h"
 #include "camera/base/io/async/EventBase.h"
@@ -57,12 +55,10 @@ private:
     static gboolean on_reload(gpointer user_data);
 
     std::string conf_path_;
-    std::unique_ptr<IConfigLoader> config_loader_;
+    FileConfigLoader config_loader_;
     Config config_;
 
     // Infrastructure (created once, live across reloads).
-    std::unique_ptr<IV4l2DeviceFactory> v4l2_factory_;
-    std::unique_ptr<ISourceFactory> source_factory_;
     ControlRegistry registry_;
     SwupdateClient swupdate_;  // live across reloads (update may span reloads)
 

@@ -31,7 +31,7 @@ public:
     // at all, and the USB pipeline is the only thing to drive.
     UsbAwareStreamController(IStreamController* rtsp,
                              std::function<secure::SecureUsbServer*()> usb,
-                             std::function<std::string(int)> build_launch)
+                             std::function<media::PipelineSpec(int)> build_launch)
         : rtsp_(rtsp), usb_(std::move(usb)),
           build_launch_(std::move(build_launch)) {}
 
@@ -85,15 +85,15 @@ public:
         if (rtsp_ != nullptr) rtsp_->refresh_launch(cam);
         auto* server = usb_ ? usb_() : nullptr;
         if (server == nullptr || !build_launch_) return;
-        std::string launch = build_launch_(cam);
-        if (!launch.empty())
+        media::PipelineSpec launch = build_launch_(cam);
+        if (!launch.source.empty())
             server->refresh_launch(static_cast<uint8_t>(cam), std::move(launch));
     }
 
 private:
     IStreamController* rtsp_;
     std::function<secure::SecureUsbServer*()> usb_;
-    std::function<std::string(int)> build_launch_;
+    std::function<media::PipelineSpec(int)> build_launch_;
 };
 
 }  // namespace camera

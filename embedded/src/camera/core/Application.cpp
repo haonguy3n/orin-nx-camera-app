@@ -17,11 +17,10 @@
 #include "camera/control/ControlServer.h"
 #include "camera/control/handlers/RegisterHandlers.h"
 #include "camera/lib/net/NetworkResolver.h"
-#include "camera/pipeline/PipelineBuilder.h"
 #include "camera/pipeline/SourceFactory.h"
-#include "camera/lib/v4l2/V4l2Factory.h"
 #ifdef ENABLE_SECURE_USB
 #include "camera/core/UsbAwareStreamController.h"
+#include "camera/media/CameraPipeline.h"
 #include "camera/secure/FfsGadget.h"
 #endif
 
@@ -30,9 +29,7 @@
 namespace camera {
 namespace {
 
-// The encode chain a source would use for RTSP, terminated at an appsink so
-// the secure USB transport gets the elementary stream straight from the
-// encoder.
+#ifdef ENABLE_SECURE_USB
 // Detection is on whenever the model file is present (readable). No config
 // toggle: shipping the model (CAMERA_FACE_MODEL) is the switch.
 bool face_detection_available(const Config& cfg) {
@@ -56,30 +53,33 @@ int detect_height_for(const CameraConfig& cam, int detect_width) {
     return even < 2 ? 2 : even;
 }
 
-std::string usb_video_launch(ISourceFactory& factory, const CameraConfig& cam,
-                             const Config& cfg) {
-    auto source = factory.create(cam.source);
+// What the secure USB transport should build for one camera: the source's
+// capture fragment plus typed encode/detect parameters. The tee and both
+// branches are constructed as objects in media::CameraPipeline -- the old
+// find-and-replace of the RTP tail inside the launch string is gone, and with
+// it the class of bug where a mismatched tail silently dropped a branch.
+media::PipelineSpec usb_pipeline_spec(const CameraConfig& cam,
+                                      const Config& cfg) {
+    media::PipelineSpec spec;
+    auto source = create_source(cam.source);
     if (!source)
-        return {};
-    std::string launch = source->build_launch(cam);
-    // build_launch ends with the RTP payloader inside "( ... )"; swap that
-    // tail for the appsink one rather than duplicating the source setup.
-    const std::string rtp_tail = PipelineBuilder::nvenc_tail(cam);
-    const size_t at = launch.rfind(rtp_tail);
-    if (at == std::string::npos)
-        return {};
-    // With a detection model present, tee the source: one leg encodes as
-    // before, the other is the raw branch the detector consumes.
-    std::string tail = PipelineBuilder::appsink_tail(cam);
+        return spec;
+    spec.source = source->build_source_fragment(cam);
+    spec.h265 = cam.codec == "h265";
+    spec.bitrate = cam.bitrate;
+    // The test source has no NVIDIA hardware behind it (dev hosts, CI).
+    spec.hw = cam.source != "test";
+    // With a detection model present, the pipeline grows the raw branch the
+    // detector consumes.
     if (face_detection_available(cfg)) {
-        tail = "tee name=t  t. ! " + tail + "  t. ! "
-             + PipelineBuilder::detect_branch(
-                   cfg.detect_width, detect_height_for(cam, cfg.detect_width));
+        spec.detect_width = cfg.detect_width;
+        spec.detect_height = detect_height_for(cam, cfg.detect_width);
     }
-    launch.replace(at, rtp_tail.size(), tail);
-    return launch;
+    return spec;
 }
+#endif  // ENABLE_SECURE_USB
 
+#ifdef ENABLE_SECURE_USB
 // Runs `work` on the GLib main loop and waits for it.
 //
 // Control handlers mutate the config and poke live GStreamer elements, so they
@@ -115,6 +115,7 @@ std::string run_on_main_loop(const std::function<std::string()>& work) {
     job.done.wait(lock, [&job] { return job.finished; });
     return std::move(job.result);
 }
+#endif  // ENABLE_SECURE_USB
 
 // Network-mode delivery for detection boxes: the control connection, since
 // there is no Meta channel without a secure session. Same JSON payload the USB
@@ -154,9 +155,7 @@ private:
 
 Application::Application(std::string conf_path)
     : conf_path_(std::move(conf_path)),
-      config_loader_(std::make_unique<FileConfigLoader>(conf_path_)),
-      v4l2_factory_(create_v4l2_device_factory()),
-      source_factory_(std::make_unique<SourceFactory>(*v4l2_factory_)) {
+      config_loader_(conf_path_) {
     register_all_handlers(registry_);
 }
 
@@ -170,7 +169,7 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
     // itself is broken.
     const bool usb_only = config_.transports == "usb";
     if (!usb_only) {
-        rtsp_ = std::make_unique<RtspServer>(config_, *source_factory_);
+        rtsp_ = std::make_unique<RtspServer>(config_);
         // Network mode: detection boxes go out over the control connection.
         // The sink reads control_ through a pointer because the control server
         // is constructed after the mounts are built.
@@ -201,9 +200,8 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
         rtsp_.get(), [this] { return secure_usb_.get(); },
         [this](int cam) {
             return cam >= 0 && cam < Config::kNumCameras
-                       ? usb_video_launch(*source_factory_,
-                                          config_.cameras[cam], config_)
-                       : std::string();
+                       ? usb_pipeline_spec(config_.cameras[cam], config_)
+                       : media::PipelineSpec{};
         });
 #endif
     IStreamController& stream_for_handlers =
@@ -219,8 +217,6 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
     control_context_ = std::make_unique<ControlContext>(ControlContext{
             config_,
             stream_for_handlers,
-            *v4l2_factory_,
-            *source_factory_,
             swupdate_,
             [this]() { reload(); },
             [this](int camera, bool enabled) {
@@ -313,14 +309,13 @@ camera::base::Expected<camera::base::Unit, std::string> Application::start_serve
         // interface must never take down the established NCM RTSP path.
         // Direct encoder tap only when the RTSP server is not also driving
         // the sensors: Argus permits a single consumer per camera.
-        std::vector<std::string> video_launch;
+        std::vector<media::PipelineSpec> video_launch;
         if (usb_only) {
             for (int i = 0; i < Config::kNumCameras; ++i) {
                 video_launch.push_back(
                     config_.cameras[i].enabled
-                        ? usb_video_launch(*source_factory_, config_.cameras[i],
-                                           config_)
-                        : std::string());
+                        ? usb_pipeline_spec(config_.cameras[i], config_)
+                        : media::PipelineSpec{});
             }
         }
         secure_usb_ = std::make_unique<secure::SecureUsbServer>(
@@ -406,7 +401,7 @@ void Application::stop_servers() {
 }
 
 camera::base::Expected<camera::base::Unit, std::string> Application::start() {
-    config_ = config_loader_->load();
+    config_ = config_loader_.load();
     return start_servers();
 }
 
@@ -414,7 +409,7 @@ void Application::reload() {
     XLOGF(INFO, "reload: re-reading %s", conf_path_.c_str());
 
     Config previous = config_;
-    config_ = config_loader_->load();
+    config_ = config_loader_.load();
 
     stop_servers();  // release the ports before rebinding
     if (auto r = start_servers(); !r) {

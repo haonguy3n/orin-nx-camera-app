@@ -53,7 +53,8 @@ asymmetry is the accepted trade-off recorded below, not an unfinished edge.
 |---|---|---|
 | Capture, one per sensor | `media::CameraPipeline` | `media/CameraPipeline.{h,cpp}` |
 | Delivery strategy (video) | `media::IFrameTransport` | `media/CameraPipeline.h` |
-| Launch strings | `PipelineBuilder` | `pipeline/PipelineBuilder.{h,cpp}` |
+| Launch strings (network mode + source fragments) | `PipelineBuilder` | `pipeline/PipelineBuilder.{h,cpp}` |
+| Typed usb pipeline (tee/encode/detect) | `media::PipelineSpec`, `Element/Bin/Tee` | `media/` |
 | Detector (YuNet/CUDA) | `detect::IFaceDetector` | `detect/FaceDetector.{h,cpp}` |
 | Box payload | `detect::to_meta_json` | `detect/FaceDetector.cpp` |
 | Delivery strategy (boxes) | `detect::IMetaSink` | `detect/MetaSink.h` |
