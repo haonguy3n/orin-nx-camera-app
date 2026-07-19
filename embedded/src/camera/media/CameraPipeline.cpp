@@ -150,20 +150,20 @@ void CameraPipeline::deliver_raw(GstSample* sample) {
     gst_buffer_unmap(buffer, &map);
 }
 
+bool CameraPipeline::pump_raw(int timeout_ms) {
+    if (detect_ == nullptr) return false;
+    GstSample* raw = gst_app_sink_try_pull_sample(
+        detect_, static_cast<GstClockTime>(timeout_ms) * GST_MSECOND);
+    if (raw == nullptr) return false;
+    deliver_raw(raw);
+    gst_sample_unref(raw);
+    return true;
+}
+
 bool CameraPipeline::pump(int timeout_ms) {
     if (sink_ == nullptr) return false;
     const GstClockTime timeout =
         static_cast<GstClockTime>(timeout_ms) * GST_MSECOND;
-
-    // The raw branch is best-effort and must never gate video: take whatever
-    // is already there without waiting.
-    if (detect_ != nullptr) {
-        if (GstSample* raw = gst_app_sink_try_pull_sample(detect_, 0)) {
-            deliver_raw(raw);
-            gst_sample_unref(raw);
-        }
-    }
-
     GstSample* sample = gst_app_sink_try_pull_sample(sink_, timeout);
     if (sample == nullptr) return false;
     deliver(sample);

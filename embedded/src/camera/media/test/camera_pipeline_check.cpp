@@ -5,7 +5,10 @@
 //   g++ -std=c++20 -Iembedded/src $(pkg-config --cflags --libs gstreamer-1.0
 //       gstreamer-app-1.0) embedded/src/camera/media/CameraPipeline.cpp
 //       embedded/src/camera/media/test/camera_pipeline_check.cpp -o cp_check
+#include <atomic>
 #include <cassert>
+#include <chrono>
+#include <thread>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -89,6 +92,51 @@ int main(int argc, char** argv) {
     assert(!pipeline.relaunch_wanted());
     assert(pipeline.pump(1000) && "frames after relaunch");
     std::printf("[4] relaunch picks up the new description\n");
+
+    // Video and detection must be pumpable from SEPARATE threads. Inference
+    // is ~25ms while video arrives every ~16ms, so if a slow on_raw could
+    // block pump(), migrating the transport onto this class would stall the
+    // video the host is watching. Simulate the slow detector and assert video
+    // keeps flowing meanwhile.
+    {
+        struct SlowDetector : IFrameTransport {
+            void on_frame(uint8_t, const Frame&) override { ++video; }
+            void on_raw(uint8_t, const uint8_t*, int, int, int) override {
+                std::this_thread::sleep_for(std::chrono::milliseconds(60));
+                ++raw;
+            }
+            std::atomic<int> video{0}, raw{0};
+        } slow;
+
+        CameraPipeline dual(
+            0,
+            "videotestsrc name=camsrc is-live=true ! video/x-raw,width=320,height=240 "
+            "! tee name=t  t. ! queue ! appsink name=sink sync=false max-buffers=4 drop=true"
+            "  t. ! queue leaky=downstream max-size-buffers=1 ! appsink name=detect "
+            "sync=false async=false max-buffers=1 drop=false");
+        dual.add_transport(&slow);
+        const auto up = dual.start(5ULL * GST_SECOND);
+        assert(up.hasValue() && "tee'd pipeline must reach PLAYING");
+        assert(dual.has_detect_branch() && "detect appsink must be found");
+
+        std::atomic<bool> stop{false};
+        std::thread detector([&] {
+            while (!stop) dual.pump_raw(200);
+        });
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(600);
+        while (std::chrono::steady_clock::now() < deadline) dual.pump(200);
+        stop = true;
+        detector.join();
+        dual.stop();
+
+        // The detector is deliberately far slower than the frame rate; video
+        // must not be limited by it.
+        assert(slow.video > slow.raw &&
+               "video must outpace a slow detector, not be blocked behind it");
+        std::printf("[6] concurrent pumps: %d video vs %d raw (slow detector)\n",
+                    slow.video.load(), slow.raw.load());
+    }
 
     // A pipeline whose sink is missing must fail loudly, not look like a
     // camera that produces nothing.

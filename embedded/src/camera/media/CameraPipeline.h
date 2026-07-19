@@ -70,10 +70,21 @@ public:
     PipelineResult start(guint64 timeout_ns = 10ULL * GST_SECOND);
     void stop();
 
-    // Pulls at most one frame and fans it out. Returns false on timeout, so
-    // the caller's loop stays responsive to shutdown. `timeout_ms` bounds the
-    // wait.
+    // Pulls at most one ENCODED frame and fans it out. Returns false on
+    // timeout, so the caller's loop stays responsive to shutdown.
     bool pump(int timeout_ms);
+
+    // Pulls at most one RAW frame from the detection branch and fans it out via
+    // on_raw. Call from a SEPARATE thread to pump(): inference is ~25 ms while
+    // video arrives every ~16 ms, so running both on one thread would stall the
+    // video the host is watching behind the detector. Keeping them apart is why
+    // the existing transport runs a dedicated detection thread, and that
+    // property has to survive the migration.
+    //
+    // Returns false when there is no detect branch or nothing arrived in time.
+    bool pump_raw(int timeout_ms);
+
+    [[nodiscard]] bool has_detect_branch() const { return detect_ != nullptr; }
 
     // Runtime property on the live source element (argus forwards its range
     // properties while streaming). False when nothing is up.
