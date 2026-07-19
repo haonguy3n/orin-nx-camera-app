@@ -63,24 +63,28 @@ IMX296 -> Argus/ISP -> CameraPipeline (one per sensor)
   return on, and since usb mode binds no socket, a failed switch leaves only
   the serial console.
 - **RTSP is kept** as a separate, optional network path (decision 2026-07-19).
-  It is not part of this stack: it stays a plain RTSP server for interop with
-  VLC, ffmpeg and NVRs, and for a future network mode that does not need the
-  encrypted record protocol. It carries no detection metadata, because that
-  rides the Meta channel which only exists inside a session.
+  It stays a plain RTSP server for interop with VLC, ffmpeg and NVRs. It DOES
+  carry face detection: the mount's launch string grows a detect branch beside
+  pay0, MountController picks the appsink up on media-configure, and boxes are
+  pushed to control clients as `{"event":"faces",...}` events. The payload is
+  the same to_meta_json the Meta channel carries, so the host renders both
+  transports with identical code.
 
 ## Trade-offs and open points
 
-1. **RTSP is retained for interop.** Kept deliberately so VLC/ffmpeg/NVR
-   clients still work and a future network mode has a plain option. It stands
-   beside this stack rather than inside it: no encryption, and no detection
-   metadata, since Meta only exists within a session. Two network paths is the
-   accepted cost.
-2. **Discovery stays outside the session.** Over TCP the host needs an address
+1. **RTSP is retained for interop**, and now carries detection too (boxes via
+   control events rather than the Meta channel). What it still does NOT get is
+   encryption: RTSP video is in the clear, where the record protocol is not.
+   Two network paths is the accepted cost.
+2. **The control protocol is no longer strictly request/response.** A line
+   without an "id" is a server-initiated event. Any client assuming every line
+   is a reply needs updating -- the bundled viewer already does.
+3. **Discovery stays outside the session.** Over TCP the host needs an address
    first; the UDP responder covers that and is unencrypted by nature.
-3. **Auth over a real network.** The CSU handshake pins the device certificate.
+4. **Auth over a real network.** The CSU handshake pins the device certificate.
    On an untrusted network the CA-signed device cert path should probably be
    mandatory rather than optional.
-4. **The USB gadget coupling is separate and still real.** CDC-NCM only exists
+5. **The USB gadget coupling is separate and still real.** CDC-NCM only exists
    while the composite gadget is bound, and that binding depends on
    camera-streamer owning FunctionFS. That is why stopping the service drops
    ssh, and why switching to network mode once left the device unreachable

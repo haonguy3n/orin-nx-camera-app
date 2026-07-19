@@ -38,6 +38,13 @@ signals:
     void disconnected();
     void errorOccurred(const QString &message);
 
+    // Server-initiated event, i.e. a line with no "id". The device pushes
+    // these; today the only one is "faces", carrying detection boxes in
+    // network mode, where there is no Meta channel to ride. `data` is the
+    // same to_meta_json payload the secure USB path sends, so both transports
+    // feed the identical host code.
+    void eventReceived(const QString &event, int camera, const QJsonObject &data);
+
 private:
     void readLines();
     void failAllPending(const QString &message);

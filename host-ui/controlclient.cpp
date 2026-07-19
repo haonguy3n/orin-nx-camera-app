@@ -109,6 +109,21 @@ void ControlClient::readLines()
         }
 
         const QJsonObject response = doc.object();
+
+        // A line with no "id" is a server-initiated event, not a reply. The
+        // control protocol is no longer strictly request/response: the device
+        // pushes detection boxes this way in network mode. Checked before the
+        // id lookup, since an event would otherwise be silently dropped as an
+        // unmatched response.
+        if (!response.contains(QStringLiteral("id")) &&
+            response.contains(QStringLiteral("event"))) {
+            emit eventReceived(
+                response.value(QStringLiteral("event")).toString(),
+                response.value(QStringLiteral("camera")).toInt(-1),
+                response.value(QStringLiteral("data")).toObject());
+            continue;
+        }
+
         // The server echoes our numeric id verbatim; unknown/absent ids
         // (or "id": null for our own malformed requests) match no callback.
         const qint64 id = static_cast<qint64>(

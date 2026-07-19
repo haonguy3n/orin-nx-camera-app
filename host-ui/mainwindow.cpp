@@ -545,6 +545,17 @@ void MainWindow::setupConnections()
                     });
             });
 
+    // Detection boxes in network mode arrive as control events rather than on
+    // the secure USB Meta channel. Same payload either way, so both feed
+    // applyFaceMeta and the identical FrameView overlay.
+    connect(m_control, &ControlClient::eventReceived, this,
+            [this](const QString &event, int camera, const QJsonObject &data) {
+                if (event != QLatin1String("faces") || camera < 0)
+                    return;
+                applyFaceMeta(camera,
+                              QJsonDocument(data).toJson(QJsonDocument::Compact));
+            });
+
     // OTA update: upload .swu file to device.
     connect(m_controlPanel, &ControlPanel::uploadRequested, this,
             [this](const QString &filePath) {
