@@ -112,7 +112,7 @@ Config FileConfigLoader::load() {
     if (cfg.listen.empty())
         cfg.listen = "all";
     cfg.transports = get_choice(kf, "server", "transports", cfg.transports,
-                                {"both", "network", "usb"});
+                                {"network", "usb"});
     cfg.recovery_update =
         get_bool(kf, "server", "recovery-update", cfg.recovery_update);
     cfg.control_port = get_int(kf, "server", "control-port", cfg.control_port);
@@ -184,6 +184,21 @@ Config FileConfigLoader::load() {
                 cam.isp[*k + strlen("isp-")] = value;
         }
         g_strfreev(keys);
+    }
+
+    // One transport serves video at a time (user decision 2026-07-19). The
+    // old "both" ran RTSP and secure USB together, which Argus cannot honour
+    // -- only one consumer may open a sensor -- so the USB side had to pull
+    // frames back off the local RTSP mount through loopback. That fallback
+    // cost an RTP round trip AND silently dropped face detection, because the
+    // re-serve string has no detect branch. Rejecting the mode removes the
+    // failure instead of documenting it.
+    if (cfg.transports != "usb" && cfg.transports != "network") {
+        XLOGF(WARN,
+              "config: transports='%s' is not supported (one transport serves "
+              "video at a time); using 'usb'. Set transports=network for RTSP.",
+              cfg.transports.c_str());
+        cfg.transports = "usb";
     }
 
     XLOGF(INFO, "config: loaded %s", path_.c_str());

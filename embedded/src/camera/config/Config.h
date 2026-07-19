@@ -68,7 +68,8 @@ struct Config {
     //
     // Distinct from `listen`, which selects *which network* the TCP servers
     // use (its "usb" value means the CDC-NCM gadget network, not this).
-    std::string transports = "both";
+    // One transport serves video at a time; "both" is rejected at load.
+    std::string transports = "usb";
     // Recovery update channel.
     //
     // With transports=usb everything else is confined to loopback, so a

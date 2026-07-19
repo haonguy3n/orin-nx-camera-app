@@ -830,22 +830,14 @@ void SecureUsbServer::set_face_detection(std::string model, int input_width,
 std::string SecureUsbServer::video_description(uint8_t camera) const {
     if (camera < video_launch_.size() && !video_launch_[camera].empty())
         return video_launch_[camera];
-    // Fallback: the RTSP server owns the sensor, so take the frames back off
-    // its local mount. Costs an RTP payload/depayload round trip through
-    // loopback, which is why it is not used when we can tap the encoder.
-    //
-    // Worth a line in the log: this path has no detect branch, so falling back
-    // silently disables face detection (and snapshots) while video keeps
-    // working perfectly -- an easy failure to misread as "detection is broken".
-    XLOGF(WARN,
-          "secure-usb: cam%u has no direct launch; falling back to the RTSP "
-          "re-serve (no detect branch, so no face detection or snapshots)",
+    // No fallback. This used to re-serve the camera's own RTSP mount over
+    // loopback when RTSP owned the sensor, which only arose under
+    // transports=both -- a mode that no longer exists. That path also had no
+    // detect branch, so it disabled face detection without saying so. An empty
+    // description now fails the pipeline loudly instead.
+    XLOGF(WARN, "secure-usb: cam%u has no launch description; not streaming",
           static_cast<unsigned>(camera));
-    return "rtspsrc location=rtsp://127.0.0.1:8554/cam" + std::to_string(camera) +
-           " protocols=tcp latency=0"
-           " ! rtph265depay ! h265parse config-interval=-1"
-           " ! video/x-h265,stream-format=byte-stream"
-           " ! appsink name=sink sync=false max-buffers=8 drop=true";
+    return {};
 }
 
 void SecureUsbServer::run() {
